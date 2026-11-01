@@ -12,3 +12,6 @@ dist
 
 # 审计脚本产出的截图不进仓库
 scripts/*.png
+
+# 本地 IDE 项目数据目录不进仓库
+.workbuddy/
