@@ -1,0 +1,35 @@
+{
+  "name": "geolab",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.2",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "typecheck": "nuxt typecheck",
+    "data:sync": "node scripts/sync-map-data.mjs",
+    "data:validate": "node --experimental-strip-types --no-warnings scripts/validate-data.mjs",
+    "data:shapes": "node scripts/build-detail-shapes.mjs",
+    "audit": "node scripts/audit.mjs",
+    "check": "pnpm data:sync && pnpm data:shapes && pnpm data:validate && pnpm typecheck && pnpm build"
+  },
+  "dependencies": {
+    "d3-geo": "^3.1.1",
+    "motion-v": "^1.7.4",
+    "nuxt": "^4.1.2",
+    "topojson-client": "^3.1.0",
+    "vue": "^3.5.21",
+    "world-atlas": "^2.0.2"
+  },
+  "devDependencies": {
+    "@types/d3-geo": "^3.1.0",
+    "@types/geojson": "^7946.0.16",
+    "@types/topojson-client": "^3.1.4",
+    "@types/topojson-specification": "^1.0.5",
+    "playwright-core": "^1.64.1",
+    "typescript": "^5.9.3",
+    "vue-tsc": "^3.3.14"
+  }
+}

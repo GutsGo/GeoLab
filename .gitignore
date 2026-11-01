@@ -1,0 +1,14 @@
+node_modules
+.pnpm-store
+.nuxt
+.output
+.data
+dist
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+
+# 审计脚本产出的截图不进仓库
+scripts/*.png
