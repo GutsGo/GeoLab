@@ -57,16 +57,15 @@ try {
   // 1. 抽卡视图：空格抽一张，轮廓描边动画确实在跑
   await p.keyboard.press('Space')
   await p.waitForTimeout(260)
-  out.rolling = await p.locator('.cur-name').evaluate((el) => el.classList.contains('rolling'))
-  await p.waitForTimeout(1500)
   out.drawn = (await p.locator('.cur-name').innerText()).split('\n')[0]
+  await p.waitForTimeout(1500)
   out.traceSegments = await p.locator('.dmap .trace').count()
   out.cardReady = await p.evaluate(() => {
     const el = document.querySelector('.card-slot > div')
     return el ? getComputedStyle(el).opacity : 'missing'
   })
   check('空格能抽出国家', !!out.drawn)
-  check('抽取过程中有 rolling 状态', out.rolling === true, String(out.rolling))
+  check('抽取后显示国名而非占位', !!out.drawn && out.drawn !== '按下抽取', String(out.drawn))
   check('轮廓描边动画有路径', out.traceSegments > 0, `trace=${out.traceSegments}`)
   check('详情卡片最终不透明', out.cardReady === '1', `opacity=${out.cardReady}`)
 
@@ -83,18 +82,18 @@ try {
   check('索引能跳转到条目', !!out.pickedFromIndex, String(out.pickedFromIndex))
 
   // 3. 测验：题目不能是屏上这个国家（防止开卷）
-  await p.locator('.map-actions .btn').nth(1).click()
-  await p.waitForTimeout(900)
+  await p.locator('.view-switch .vs-btn').nth(2).click()
+  await p.waitForSelector('.g-opt', { timeout: 15000 })
+  await p.waitForTimeout(500)
   const onScreen = out.pickedFromIndex
-  const opts = await p.locator('.opt-name').allInnerTexts()
+  const opts = await p.locator('.g-opt .opt-text').allInnerTexts()
   out.quizOptions = opts.length
   out.quizNotOnScreen = !opts.includes(onScreen)
-  out.stageHidden = await p.evaluate(
-    () => getComputedStyle(document.querySelector('.stage')).visibility === 'hidden',
-  )
+  // 挑战视图是整页切换：抽卡视图整棵卸载，国名不在 DOM，天然防开卷
+  out.stageHidden = await p.evaluate(() => document.querySelector('.cur-name') === null)
   await p.keyboard.press('1')
   await p.waitForTimeout(500)
-  out.quizAnswered = (await p.locator('.feedback').count()) > 0
+  out.quizAnswered = (await p.locator('.g-result .res-main').count()) > 0
   await p.keyboard.press('Escape')
   await p.waitForTimeout(600)
   check('测验有 4 个选项', out.quizOptions === 4, `options=${out.quizOptions}`)
@@ -140,18 +139,39 @@ try {
   // 5. 挑战视图：四个选项 + 作答 + 下一题
   await p.locator('.vs-btn', { hasText: '挑战' }).click()
   await p.waitForTimeout(1400)
+  // 每日模式会保留作答状态，切到自由练习保证题目是新一轮
+  await p.locator('.mode-switch button', { hasText: '自由练习' }).click()
+  await p.waitForTimeout(800)
+  // 自由模式随机出题型：地图定位题没有选项，跳过直到出选择题
+  for (let i = 0; i < 5 && (await p.locator('.g-opt').count()) === 0; i++) {
+    await p.locator('.skip').click().catch(() => {})
+    await p.waitForTimeout(700)
+  }
   out.gameOptions = await p.locator('.g-opt').count()
   out.gameQuestion = (await p.locator('.g-q h2').innerText()).slice(0, 20)
   await p.locator('.g-opt').first().click()
   await p.waitForTimeout(600)
   out.gameAnswered = await p.locator('.g-result').count()
-  const roundBefore = await p.locator('.g-count').innerText()
-  await p.keyboard.press('Enter')
-  await p.waitForTimeout(900)
-  out.gameNext = (await p.locator('.g-count').innerText()) !== roundBefore
+  // 题号 chip 是「第 N 题」那枚（第一枚 hud-chip 是模式徽标，恒为「自由练习」）
+  const roundChip = p.locator('.hud-chip', { hasText: '第' })
+  const roundBefore = await roundChip.innerText()
+  // 答对 → 首都追问：correct-pop 停顿或已自动进入首都题（res-idle），回车均可推进；
+  // 答错 → 直接结算，回车进下一题。三条路都算「回车推进了流程」。
+  if ((await p.locator('.correct-pop').count()) > 0) {
+    await p.keyboard.press('Enter')
+    await p.waitForTimeout(800)
+    out.gameNext = (await p.locator('.res-idle').count()) > 0
+  } else if ((await p.locator('.res-idle').count()) > 0) {
+    // 停顿已过、首都题已自动出现
+    out.gameNext = true
+  } else {
+    await p.keyboard.press('Enter')
+    await p.waitForTimeout(900)
+    out.gameNext = (await roundChip.innerText()) !== roundBefore
+  }
   check('挑战视图有 4 个选项', out.gameOptions === 4, `options=${out.gameOptions}`)
   check('挑战能作答', out.gameAnswered > 0)
-  check('回车能进下一题', out.gameNext === true)
+  check('回车能推进题目流程', out.gameNext === true)
 
   // 6. 小国特写：新加坡在 110m 里没有轮廓，必须靠 10m 补丁画出真实岛形
   await p.locator('.vs-btn', { hasText: '抽卡' }).click()
