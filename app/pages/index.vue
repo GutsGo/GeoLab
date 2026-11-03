@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { CONTINENT_META, countryById } from '~/data'
+import { CN_REGION_META, provinceById as cnProvinceById } from '~/data/china'
 import type { Filter } from '~/composables/useDeck'
+import { useAchievements } from '~/composables/useAchievements'
 
 type View = 'draw' | 'globe' | 'game'
 
 const deck = useDeck()
+const achv = useAchievements()
 const {
   current,
   currentId,
@@ -24,13 +27,62 @@ const {
 
 const view = ref<View>('draw')
 const indexOpen = ref(false)
+const achvOpen = ref(false)
+const compareOpen = ref(false)
 const scanKey = ref(0)
 const toast = ref('')
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 
+/* ---------- 中国省区：不设独立顶层视图，作为「范围」并入抽卡与挑战 ---------- */
+const cn = useChina()
+const cnSeenSet = cn.seenSet
+const cnSeenCount = cn.seenCount
+const cnCurrent = cn.current
+const cnCurrentId = cn.currentId
+const cnHistory = cn.history
+const cnTotal = cn.total
+/** 抽卡视图：当前抽的是省区（true）还是国家（false） */
+const drawCn = ref(false)
+/** 挑战视图：世界国家 / 中国省区 */
+const gameScope = ref<'world' | 'cn'>('world')
+const cnQuizRef = ref<{ onKey: (e: KeyboardEvent) => void } | null>(null)
+const cnHueOf = (id: string) => {
+  const p = cnProvinceById(id)
+  return p ? CN_REGION_META[p.region].hue : undefined
+}
+
+function cnDraw() {
+  const p = cn.draw()
+  if (p) flash(`解锁：${p.name}（${p.short}）`)
+}
+
+function cnPick(id: string) {
+  cn.focusProvince(id)
+}
+
+/** 省区浏览的上一个：历史栈第二位 */
+function cnBack() {
+  if (cnHistory.value.length >= 2) cn.focusProvince(cnHistory.value[1] ?? '')
+}
+
+/** 切到省区范围；一张卡都没有就先抽一张 */
+function toggleDrawCn() {
+  drawCn.value = true
+  if (!cnCurrent.value) cnDraw()
+}
+
+/** 抽卡视图的「抽一个」：按当前范围决定抽国家还是省区 */
+function drawOne() {
+  if (drawCn.value) cnDraw()
+  else draw()
+}
+
 const accent = computed(() => (current.value ? CONTINENT_META[current.value.continent].hue : '#1d4ed8'))
 const ringLen = 2 * Math.PI * 11
 const dash = computed(() => `${(seenPct.value / 100) * ringLen} ${ringLen}`)
+
+/** 当前范围内 SRS 已到期待复习的国家数 */
+const dueCount = computed(() => deck.dueCount.value)
 
 const VIEWS: { key: View; label: string; tip: string }[] = [
   { key: 'draw', label: '抽卡', tip: '一次只看一张地图 (D)' },
@@ -44,25 +96,50 @@ function flash(msg: string) {
   toastTimer = setTimeout(() => (toast.value = ''), 2400)
 }
 
+/** 成就解锁队列逐条弹出：上一条 toast 放完再弹下一条 */
+function drainUnlocked() {
+  if (achv.justUnlocked.value.length === 0) return
+  const hit = achv.shiftUnlocked()
+  if (hit) flash(`成就解锁：${hit.title}`)
+  setTimeout(drainUnlocked, 2600)
+}
+
+watch(
+  () => achv.justUnlocked.value.length,
+  (n, prev) => {
+    if (n > (prev ?? 0)) drainUnlocked()
+  },
+)
+
 function switchView(v: View) {
   if (view.value === v) return
   view.value = v
 }
 
-/** 抽一个，名字随结果直接切换 */
+/** 抽一个，名字随结果直接切换；抽到到期复习的国家时给出提示 */
 function draw() {
   const wasCleared = poolCleared.value
   deck.draw()
+  const reviewId = deck.lastDrawReview.value
+  const c = current.value
+  if (reviewId && c && c.id === reviewId) {
+    const days = deck.seenDaysAgo(reviewId)
+    flash(days != null && days > 0 ? `复习：${c.name} · 上次 ${days} 天前` : `复习：${c.name}`)
+    return
+  }
   if (!wasCleared && poolCleared.value && total.value > 0) flash('这个范围已全部解锁')
 }
 
 function chooseFilter(f: string) {
+  drawCn.value = false
   deck.setFilter(f as Filter)
 }
 
 function onPick(id: string) {
   deck.focusCountry(id)
+  drawCn.value = false // 具体国家一律落在国家地图上，别停在省区范围
   indexOpen.value = false
+  compareOpen.value = false
   view.value = 'draw'
 }
 
@@ -76,6 +153,7 @@ function onReset() {
 function onMapPick(id: string) {
   if (countryById.has(id)) {
     deck.focusCountry(id)
+    drawCn.value = false
     view.value = 'draw'
     return
   }
@@ -84,6 +162,7 @@ function onMapPick(id: string) {
 
 function onGameOpen(id: string) {
   deck.focusCountry(id)
+  drawCn.value = false
   view.value = 'draw'
 }
 
@@ -103,14 +182,22 @@ function onKey(e: KeyboardEvent) {
   const tag = el?.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el?.isContentEditable) return
 
-  if (indexOpen.value) {
-    if (e.key === 'Escape') indexOpen.value = false
+  if (indexOpen.value || achvOpen.value || compareOpen.value) {
+    if (e.key === 'Escape') {
+      indexOpen.value = false
+      achvOpen.value = false
+      compareOpen.value = false
+    }
     return
   }
 
-  // 挑战视图的按键交给 GamePanel 自己处理（1-4 / H / Enter）
+  // 挑战视图：省区范围时按键交给 ChinaQuiz（1-4 / Enter），世界范围交给 GamePanel 自己处理
   if (view.value === 'game') {
-    if (e.key === 'Escape') view.value = 'draw'
+    if (e.key === 'Escape') {
+      view.value = 'draw'
+      return
+    }
+    if (gameScope.value === 'cn') cnQuizRef.value?.onKey(e)
     return
   }
 
@@ -121,16 +208,16 @@ function onKey(e: KeyboardEvent) {
       case 'Space':
         if (onButton) return // 让按钮自己响应空格，别抢
         e.preventDefault()
-        draw()
+        drawOne()
         return
       case 'ArrowRight':
         e.preventDefault()
-        draw()
+        drawOne()
         return
       case 'ArrowLeft':
-        if (!canBack.value) return
         e.preventDefault()
-        deck.back()
+        if (drawCn.value) cnBack()
+        else if (canBack.value) deck.back()
         return
     }
   }
@@ -138,6 +225,9 @@ function onKey(e: KeyboardEvent) {
   switch (e.key.toLowerCase()) {
     case 'i':
       indexOpen.value = true
+      break
+    case 'a':
+      achvOpen.value = true
       break
     case '/':
       e.preventDefault()
@@ -160,6 +250,8 @@ function onKey(e: KeyboardEvent) {
 
 onMounted(() => {
   deck.hydrate()
+  achv.hydrate()
+  cn.hydrate()
   if (!current.value) draw()
   window.addEventListener('keydown', onKey)
 })
@@ -170,9 +262,9 @@ watch(currentId, (id, prev) => {
 })
 
 // 弹层打开时锁住背景滚动
-watch(indexOpen, (i) => {
+watch([indexOpen, achvOpen, compareOpen], ([a, b, c]) => {
   if (typeof document === 'undefined') return
-  document.body.classList.toggle('no-scroll', i)
+  document.body.classList.toggle('no-scroll', a || b || c)
 })
 
 onBeforeUnmount(() => {
@@ -211,6 +303,7 @@ onBeforeUnmount(() => {
           </span>
         </div>
         <button class="btn" @click="indexOpen = true">索引</button>
+        <button class="btn" @click="achvOpen = true">成就</button>
       </div>
     </header>
 
@@ -220,21 +313,32 @@ onBeforeUnmount(() => {
       <template v-if="view === 'draw'">
       <div class="filter-row">
         <div class="chips">
-          <button v-for="f in ['全部', ...deck.CONTINENTS]" :key="f" class="chip" :data-active="filter === f"
+          <button v-for="f in ['全部', ...deck.CONTINENTS]" :key="f" class="chip" :data-active="!drawCn && filter === f"
             @click="chooseFilter(f)">
             {{ f }}
           </button>
+          <span class="chip-sep" aria-hidden="true"></span>
+          <button class="chip" :data-active="drawCn" title="切换到中国省级行政区" @click="toggleDrawCn">
+            中国省区
+          </button>
         </div>
         <div class="right-tools">
-          <span class="pool-hint mono" :class="{ done: poolCleared }">
-            <template v-if="poolCleared">{{ pools.length }} 个已看完</template>
-            <template v-else>{{ remaining }} / {{ pools.length }} 待解锁</template>
-            · <kbd>SPACE</kbd> 抽取
-          </span>
+          <template v-if="drawCn">
+            <span class="pool-hint mono">已解锁 {{ cnSeenCount }} / {{ cnTotal }} · <kbd>SPACE</kbd> 抽取</span>
+          </template>
+          <template v-else>
+            <span v-if="dueCount > 0" class="pool-hint review mono">待复习 {{ dueCount }}</span>
+            <span class="pool-hint mono" :class="{ done: poolCleared }">
+              <template v-if="poolCleared">{{ pools.length }} 个已看完</template>
+              <template v-else>{{ remaining }} / {{ pools.length }} 待解锁</template>
+              · <kbd>SPACE</kbd> 抽取
+            </span>
+          </template>
         </div>
       </div>
 
-      <div class="stage">
+      <!-- 国家范围：世界地图 + 国家卡 -->
+      <div v-if="!drawCn" class="stage">
         <section class="map-side">
           <div class="map-stage">
             <ClientOnly>
@@ -265,6 +369,9 @@ onBeforeUnmount(() => {
           <!-- 操作条在地图外：不遮挡地图主体，移动端也不会误触 -->
           <div class="map-actions-bar">
             <button class="btn icon-btn" :disabled="!canBack" title="上一个 (←)" @click="deck.back()">←</button>
+            <button class="btn icon-btn" :disabled="!current" title="与其他国家并排对比" @click="compareOpen = true">
+              对比
+            </button>
             <Motion as="button" class="draw-btn" :while-hover="{ y: -2 }" :while-tap="{ scale: 0.96 }"
               :transition="{ type: 'spring', stiffness: 420, damping: 26 }" @click="draw">
               抽取一个
@@ -282,6 +389,53 @@ onBeforeUnmount(() => {
               :transition="{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }">
               <CountryDetail :country="current" :highlight-city="pickedCity" @pick="deck.focusCountry"
                 @shuffle-city="onShuffleCity" />
+            </Motion>
+          </AnimatePresence>
+        </aside>
+      </div>
+
+      <!-- 省区范围：中国地图 + 省区卡，与国家范围同一套舞台 -->
+      <div v-else class="stage">
+        <section class="map-side">
+          <div class="map-stage">
+            <ClientOnly>
+              <ChinaMap :current-id="cnCurrentId" :hue-of="cnHueOf" @pick="cnPick" />
+              <template #fallback>
+                <div class="map-skeleton">地图装载中…</div>
+              </template>
+            </ClientOnly>
+
+            <!-- 与抽卡视图同款 HUD：省名悬浮在海面上 -->
+            <div class="hud hud-top">
+              <div class="map-label">
+                <span class="kicker">{{ cnCurrent ? cnCurrent.region + ' / ' + cnCurrent.kind : '中国省区' }}</span>
+                <AnimatePresence mode="wait">
+                  <Motion :key="cnCurrentId || 'none'" as="div" class="cur-name" :initial="{ opacity: 0, y: 8 }"
+                    :animate="{ opacity: 1, y: 0 }" :exit="{ opacity: 0, y: -8 }"
+                    :transition="{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }">
+                    {{ cnCurrent ? cnCurrent.name : '按下抽取' }}
+                    <span v-if="cnCurrent" class="cur-en">{{ cnCurrent.seat }}</span>
+                  </Motion>
+                </AnimatePresence>
+              </div>
+            </div>
+          </div>
+          <div class="map-actions-bar">
+            <button class="btn icon-btn" :disabled="cnHistory.length < 2" title="上一个 (←)" @click="cnBack">←</button>
+            <Motion as="button" class="draw-btn" :while-hover="{ y: -2 }" :while-tap="{ scale: 0.96 }"
+              :transition="{ type: 'spring', stiffness: 420, damping: 26 }" @click="cnDraw">
+              抽取一个
+              <small>SPACE</small>
+            </Motion>
+          </div>
+        </section>
+
+        <aside class="card-slot">
+          <AnimatePresence mode="wait">
+            <Motion :key="cnCurrentId || 'empty'" as="div" :initial="{ opacity: 0, y: 14 }"
+              :animate="{ opacity: 1, y: 0 }" :exit="{ opacity: 0, y: -10 }"
+              :transition="{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }">
+              <ChinaDetail :province="cnCurrent" @pick="cnPick" />
             </Motion>
           </AnimatePresence>
         </aside>
@@ -347,18 +501,34 @@ onBeforeUnmount(() => {
       </div>
     </template>
 
-    <!-- ============ 挑战视图 ============ -->
+    <!-- ============ 挑战视图：范围切换 + 对局 ============ -->
     <template v-else>
-      <div class="game-intro">
-        <div>
-          <span class="kicker">看轮廓答题</span>
-          <h2 class="display game-title">只给一张轮廓图，你能认出它吗</h2>
+      <div class="filter-row">
+        <div class="chips">
+          <button class="chip" :data-active="gameScope === 'world'" @click="gameScope = 'world'">世界国家</button>
+          <button class="chip" :data-active="gameScope === 'cn'" @click="gameScope = 'cn'">中国省区</button>
         </div>
-        <p class="game-desc">
-          随机给出国家轮廓，认出国名得 2 分，连首都一起答对再得 1 分；每看一条提示减 1 分。答错的国家过几题会回来重考。
-        </p>
+        <div class="right-tools">
+          <span class="pool-hint mono">
+            {{ gameScope === 'world' ? '每日 10 题 · 完成即打卡' : `已解锁 ${cnSeenCount} / ${cnTotal}` }}
+          </span>
+        </div>
       </div>
-      <GamePanel @open="onGameOpen" />
+
+      <template v-if="gameScope === 'world'">
+        <div class="game-intro">
+          <div>
+            <span class="kicker">看轮廓答题</span>
+            <h2 class="display game-title">只给一张轮廓图，你能认出它吗</h2>
+          </div>
+          <p class="game-desc">
+            每天 10 题固定挑战，轮廓、国旗、地图定位轮番上阵，完成即打卡。认出国名得 2 分，连首都一起答对再得 1
+            分，每看一条提示减 1 分。答错的国家过几题会回来重考，看过的国家隔天也会回来复习。
+          </p>
+        </div>
+        <GamePanel @open="onGameOpen" />
+      </template>
+      <ChinaQuiz v-else ref="cnQuizRef" />
     </template>
     </main>
 
@@ -373,6 +543,10 @@ onBeforeUnmount(() => {
 
     <CountryIndex :open="indexOpen" :seen="seen" :current-id="currentId" @close="indexOpen = false" @pick="onPick"
       @reset="onReset" />
+
+    <AchievementPanel :open="achvOpen" @close="achvOpen = false" />
+
+    <ComparePanel :open="compareOpen" :base="current" @close="compareOpen = false" @pick="onPick" />
   </div>
 </template>
 
@@ -451,8 +625,25 @@ onBeforeUnmount(() => {
   gap: 4px;
 }
 
+/* 洲筛选与「中国省区」范围之间的竖分隔 */
+.chip-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--line-strong, #d8cdb2);
+  margin-inline: 4px;
+  align-self: center;
+}
+
 .pool-hint.done {
   color: #a16207;
+}
+
+.pool-hint.review {
+  color: #b45309;
+  padding: 3px 10px;
+  border: 1px dashed #d8b98a;
+  border-radius: 999px;
+  background: #fdf6e3;
 }
 
 kbd {
@@ -484,9 +675,9 @@ kbd {
 
 .toast {
   position: fixed;
-  left: 50%;
-  bottom: 34px;
-  transform: translateX(-50%);
+  /* PC 端右上角：挂在顶栏下方，不遮索引/成就按钮 */
+  top: 84px;
+  right: 20px;
   z-index: 70;
   padding: 10px 18px;
   border-radius: 999px;
@@ -496,6 +687,7 @@ kbd {
   letter-spacing: 0.02em;
   box-shadow: 0 18px 40px -20px rgba(0, 0, 0, 0.7);
   backdrop-filter: blur(6px);
+  max-width: min(420px, calc(100vw - 40px));
 }
 
 .toast-enter-active,
@@ -508,7 +700,23 @@ kbd {
 .toast-enter-from,
 .toast-leave-to {
   opacity: 0;
-  transform: translate(-50%, 10px);
+  transform: translateY(-10px);
+}
+
+@media (max-width: 720px) {
+  .toast {
+    /* 移动端顶部居中：避开顶栏第一行两侧的内容 */
+    top: 14px;
+    right: auto;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+
+  .toast-enter-from,
+  .toast-leave-to {
+    transform: translate(-50%, -10px);
+  }
 }
 
 .right-tools {
@@ -546,9 +754,13 @@ kbd {
 }
 
 /* 大屏：地图放开宽高比，随列高拉伸；海面渐变填满，
-   地形经 preserveAspectRatio 居中不变形 */
+   地形经 preserveAspectRatio 居中不变形。
+   装载骨架同样拉满——否则刷新瞬间它还按 aspect-ratio 只填上半，
+   map-stage 底下会露出一段与卡片等高差的空白 */
 @media (min-width: 1121px) {
-  .map-stage :deep(.dmap) {
+  .map-stage :deep(.dmap),
+  .map-stage :deep(.cmap),
+  .map-stage .map-skeleton {
     height: 100%;
     aspect-ratio: auto;
   }
@@ -664,6 +876,7 @@ kbd {
   justify-content: flex-end;
   gap: 8px;
 }
+
 
 /* ---------- 全球视图 ---------- */
 .globe-view {
@@ -803,6 +1016,16 @@ kbd {
 @media (max-width: 720px) {
   .topbar {
     gap: 10px;
+  }
+
+  /* 窄屏换行后 top-actions 独占一行：进度居左，索引/成一组靠右。
+     对三个孩子直接 space-between 会把「索引」顶到行中央，所以用 auto margin 推按钮组 */
+  .top-actions {
+    flex: 1 1 100%;
+  }
+
+  .top-actions .progress-pill {
+    margin-right: auto;
   }
 
   .view-switch {
