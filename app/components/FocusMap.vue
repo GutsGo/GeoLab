@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, useId } from 'vue'
 import { geoMercator, geoPath, geoCentroid } from 'd3-geo'
-import { loadDetailShapes, loadWorld, type WorldFeature } from '~/lib/world'
+import { loadDetailShapes, loadWorld, type DetailPatch, type WorldFeature } from '~/lib/world'
 import type { CityPin } from '~/data/types'
 
 const props = withDefaults(
@@ -38,8 +38,8 @@ const hatchId = `hatch-${uid}`
 const loading = ref(true)
 const error = ref('')
 const all = ref<WorldFeature[] | null>(null)
-/** 小国的精细海岸线；缩略图里看不出差别，但测验出轮廓题时用得上 */
-const detail = ref<Map<string, WorldFeature> | null>(null)
+/** 小国的精细轮廓；缩略图里看不出差别，但测验出轮廓题时用得上（只用 self，不取邻国） */
+const detail = ref<DetailPatch['self'] | null>(null)
 
 onMounted(async () => {
   try {
@@ -47,7 +47,7 @@ onMounted(async () => {
     loading.value = false
     loadDetailShapes()
       .then((m) => {
-        detail.value = m
+        detail.value = m.self
       })
       .catch(() => {})
   } catch (e) {
@@ -227,7 +227,7 @@ const microDot = computed(() => {
   position: relative;
   width: 100%;
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: var(--r-md);
   background: linear-gradient(180deg, #fbf8f0, #f2ecdf);
 }
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
-import { geoBounds, geoCentroid, geoMercator, geoPath } from 'd3-geo'
-import { loadDetailShapes, loadWorld, type WorldFeature } from '~/lib/world'
+import { geoCentroid, geoMercator, geoPath } from 'd3-geo'
+import { loadDetailShapes, loadWorld, type DetailPatch, type WorldFeature } from '~/lib/world'
 import { countryById } from '~/data'
 import { traceLayers } from '~/lib/shapes'
 import type { CityPin } from '~/data/types'
@@ -43,14 +43,13 @@ const SEG_STAGGER = 52
 const uid = useId().replace(/[^a-zA-Z0-9_-]/g, '')
 const fillId = `dm-fill-${uid}`
 const hatchId = `dm-hatch-${uid}`
-const glowId = `dm-glow-${uid}`
 
 const stroke = computed(() => (props.tone === 'ink' ? '#38311f' : props.color))
 const fillTop = computed(() => (props.tone === 'ink' ? '#6a6250' : props.color))
 
 const all = ref<WorldFeature[] | null>(null)
-/** 小国的精细海岸线补丁（110m 放大后只有十几个顶点的那些） */
-const detail = ref<Map<string, WorldFeature> | null>(null)
+/** 小国的精细轮廓补丁 + 配套的邻国陆块（与轮廓同一套弧段简化，边界贴合） */
+const detail = ref<DetailPatch | null>(null)
 const loading = ref(true)
 const error = ref('')
 
@@ -66,7 +65,7 @@ onMounted(async () => {
     })
   }
   try {
-    // 110m 先到先画，不让 68KB 的小国补丁拖住大国的首帧
+    // 110m 先到先画，不让几 MB 的小国补丁拖住大国的首帧
     all.value = await loadWorld()
     loading.value = false
     loadDetailShapes()
@@ -84,7 +83,7 @@ onMounted(async () => {
 /** 110m 里的要素：负责取景（它的 bbox 不含海外领地那种极端情况） */
 const frame = computed(() => all.value?.find((f) => f.id === props.countryId) ?? null)
 /** 精细版几何：负责实际描绘 */
-const detailed = computed(() => (props.countryId ? detail.value?.get(props.countryId) ?? null : null))
+const detailed = computed(() => (props.countryId ? detail.value?.self.get(props.countryId) ?? null : null))
 /** 放大主图的「小国特写」：需要更细的轮廓、比例尺和位置图 */
 const smallView = computed(() => !!detailed.value)
 const feat = computed(() => frame.value ?? detailed.value)
@@ -211,22 +210,32 @@ const pinLabels = computed(() =>
     }, []),
 )
 
-/** 自适应经纬网：让每格大约 80px，大国内部也不会空得发慌 */
+/** 全画幅经纬网：真实经纬坐标投影成线，铺满整个可视区（陆地会被邻国地块自然盖住） */
 const graticule = computed(() => {
   const p = projection.value
-  const f = frame.value ?? detailed.value
-  if (!p || !f || !props.showGrid) return []
+  if (!p || !props.showGrid) return []
 
   const pxPerDeg = (p.scale() * Math.PI) / 180
   if (!Number.isFinite(pxPerDeg) || pxPerDeg <= 0) return []
   const steps = [30, 20, 10, 5, 2, 1, 0.5, 0.25, 0.1]
   const step = steps.find((s) => s <= 84 / pxPerDeg) ?? 0.1
 
-  let [[w, s], [e, n]] = geoBounds(f) as [[number, number], [number, number]]
-  if (!Number.isFinite(w) || !Number.isFinite(n)) return []
-  if (e < w) e += 360
-  const padX = Math.max(step, (e - w) * 0.08)
-  const padY = Math.max(step, (n - s) * 0.08)
+  // 画布四角反投影回经纬度，得到整幅可视区的经纬范围
+  const corners = [
+    p.invert?.([0, 0]),
+    p.invert?.([W, 0]),
+    p.invert?.([0, H]),
+    p.invert?.([W, H]),
+  ] as ([number, number] | undefined)[]
+  if (corners.some((c) => !c || !Number.isFinite(c[0]) || !Number.isFinite(c[1]))) return []
+  const lngs = corners.map((c) => c![0])
+  const lats = corners.map((c) => c![1])
+  const w = Math.min(...lngs)
+  const e = Math.max(...lngs)
+  const s = Math.min(...lats)
+  const n = Math.max(...lats)
+  // 反投影跨了反子午线（正常取景不会发生），保守放弃
+  if (e - w > 180) return []
 
   const lines: { d: string; major: boolean }[] = []
   const build = (pts: [number, number][]) => {
@@ -234,14 +243,13 @@ const graticule = computed(() => {
     return 'M' + pts.map((q) => `${q[0].toFixed(1)},${q[1].toFixed(1)}`).join('L')
   }
 
-  const lngFrom = Math.ceil((w - padX) / step) * step
-  const lngTo = e + padX
-  const latFrom = Math.max(-84, Math.floor((s - padY) / step) * step)
-  const latTo = Math.min(84, n + padY)
+  const lngFrom = Math.floor(w / step) * step
+  const latFrom = Math.max(-84, Math.floor(s / step) * step)
+  const latTo = Math.min(84, n)
   const sampleLat = Math.max(step / 4, (latTo - latFrom) / 60)
-  const sampleLng = Math.max(step / 4, (lngTo - lngFrom) / 60)
+  const sampleLng = Math.max(step / 4, (e - w) / 60)
 
-  for (let lng = lngFrom; lng <= lngTo && lines.length < 34; lng += step) {
+  for (let lng = lngFrom; lng <= e && lines.length < 34; lng += step) {
     const pts: [number, number][] = []
     for (let lat = latFrom; lat <= latTo; lat += sampleLat) {
       const xy = p([lng, lat])
@@ -252,7 +260,7 @@ const graticule = computed(() => {
   }
   for (let lat = latFrom; lat <= latTo && lines.length < 34; lat += step) {
     const pts: [number, number][] = []
-    for (let lng = lngFrom; lng <= lngTo; lng += sampleLng) {
+    for (let lng = w; lng <= e; lng += sampleLng) {
       const xy = p([lng, lat])
       if (xy && Number.isFinite(xy[0])) pts.push(xy as [number, number])
     }
@@ -314,12 +322,20 @@ const microScaleBar = computed(() => {
   return { px, label: label.replace(' 000 000', ' 000') }
 })
 
-/** 周边陆块：视口内能看到的邻国都画出来，海（背景色）和陆（邻国）才有区分 */
+/**
+ * 周边陆块：视口内能看到的邻国都画出来，海（背景色）和陆（邻国）才有区分。
+ * 有补丁的国家用 10m 邻国陆块（与本国轮廓同一套弧段简化，边界严丝合缝，
+ * 缝隙不会漏出海色背景）；没有补丁的退回 110m 粗地块 + 自己垫底补缝。
+ */
 function buildContextShapes() {
   const p = path.value
-  const list = all.value
   const proj = projection.value
-  if (!p || !list || !proj) return []
+  if (!p || !proj) return []
+
+  const patchList = detail.value ? detail.value.contexts.get(props.countryId ?? '') ?? null : null
+  const usePatch = !!patchList
+  const list: WorldFeature[] = patchList ?? all.value ?? []
+  if (!list.length) return []
 
   // 用视口四角反投影得到当前可见的经纬范围，比猜一个固定度数靠谱
   const corners = [
@@ -412,9 +428,45 @@ function buildContextShapes() {
   const pad = 70
   const view: Box = { x0: -pad, y0: -pad, x1: W + pad, y1: H + pad }
 
+  // 110m 的陆地 Union 是无缝拼贴的，但主形状用的是 10m 精细几何，
+  // 两者边界不重合，缝隙里会露出海色背景（内陆国尤其扎眼）。
+  // 所以走 110m 兜底路径时，把自己的 110m 形状也垫进邻国层：
+  // 它与邻国严丝合缝，缝被填成陆色；多出的部分会被上层 10m 填充盖住。
+  // （有 10m 邻国补丁时不需要垫：邻国与本国轮廓由同源弧段生成，本就没有缝。）
+  // 但垫层只对有陆上邻国的国家有意义——岛国垫了只会把 110m 的粗糙海岸
+  // 露在 10m 轮廓外变成米色毛边（斐济、福克兰），所以先做一次 bbox 邻接检测。
+  let padSelf = false
+  if (!usePatch && detailed.value && frame.value) {
+    let selfBb: [[number, number], [number, number]] | null = null
+    try {
+      selfBb = p.bounds(frame.value) as [[number, number], [number, number]]
+    } catch {
+      selfBb = null
+    }
+    if (selfBb) {
+      const [sx0, sy0] = selfBb[0]
+      const [sx1, sy1] = selfBb[1]
+      const gap = 3 // px：贴到这个距离内才算陆上邻国
+      padSelf = list.some((f) => {
+        if (f.id === props.countryId) return false
+        let bb: [[number, number], [number, number]]
+        try {
+          bb = p.bounds(f) as [[number, number], [number, number]]
+        } catch {
+          return false
+        }
+        const [[x0, y0], [x1, y1]] = bb
+        if (!Number.isFinite(x0) || !Number.isFinite(y0)) return false
+        return x0 <= sx1 + gap && x1 >= sx0 - gap && y0 <= sy1 + gap && y1 >= sy0 - gap
+      })
+    }
+  }
+
   const items: { id: string; d: string; visible: Box; anchor: [number, number] | null }[] = []
   for (const f of list) {
-    if (f.id === props.countryId || !near(f)) continue
+    const isSelf = f.id === props.countryId
+    if (isSelf && !padSelf) continue
+    if (!near(f)) continue
     const d = p(f) ?? ''
     if (d.length <= 24) continue
     let bb: [[number, number], [number, number]]
@@ -435,7 +487,8 @@ function buildContextShapes() {
     const vw = visible.x1 - visible.x0
     const vh = visible.y1 - visible.y0
     if (vw < 6 || vh < 6 || vw * vh < 320) continue
-    items.push({ id: f.id, d, visible, anchor: props.showLabels ? landAnchor(f) : null })
+    // 自己只是垫底的陆色，不参与标注
+    items.push({ id: f.id, d, visible, anchor: props.showLabels && !isSelf ? landAnchor(f) : null })
   }
 
   // 标注互相避让，避免小国名字糊成一团
@@ -584,30 +637,23 @@ const contextLabels = computed(() =>
         <pattern :id="hatchId" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
           <line x1="0" y1="0" x2="0" y2="7" :stroke="stroke" stroke-opacity="0.16" stroke-width="1.6" />
         </pattern>
-        <filter :id="glowId" x="-25%" y="-25%" width="150%" height="150%">
-          <feGaussianBlur stdDeviation="6" result="b" />
-          <feMerge>
-            <feMergeNode in="b" />
-            <feMergeNode in="SourceGraphic" />
-          </feMerge>
-        </filter>
       </defs>
-
-      <g v-for="(g, i) in graticule" :key="'g' + i">
-        <path
-          :d="g.d"
-          fill="none"
-          :stroke="g.major ? '#b9c9cd' : '#cfdde1'"
-          :stroke-width="g.major ? 0.8 : 0.6"
-          stroke-dasharray="3 6"
-        />
-      </g>
 
       <!-- 重新抽取时整体重建，动画才会重播 -->
       <g :key="animKey">
         <!-- 微型国家的周边参照 -->
         <g v-if="contextShapes.length" class="ctx">
           <path v-for="s in contextShapes" :key="'c' + s.id" :d="s.d" />
+        </g>
+        <!-- 经纬网压在邻国地块之上：周边大陆也见网格；主体填充半透明，线会隐约透出，像蒙了层玻璃 -->
+        <g v-for="(g, i) in graticule" :key="'g' + i">
+          <path
+            :d="g.d"
+            fill="none"
+            :stroke="g.major ? '#b9c9cd' : '#cfdde1'"
+            :stroke-width="g.major ? 0.8 : 0.6"
+            stroke-dasharray="3 6"
+          />
         </g>
         <g v-if="contextLabels.length" class="ctx-label">
           <text v-for="l in contextLabels" :key="'cl' + l.id" :x="l.x" :y="l.y" text-anchor="middle">
@@ -764,19 +810,6 @@ const contextLabels = computed(() =>
   /* 海面。陆块由 contextShapes 用纸色画出，岛国与内陆国因此可辨 */
   background:
     radial-gradient(120% 90% at 50% 8%, #f0f6f7 0%, #e6eff1 46%, #dae8ec 100%);
-}
-
-/* 细网格给海面一点质感，色相跟随海洋 */
-.dmap::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image:
-    linear-gradient(rgba(100, 134, 146, 0.05) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(100, 134, 146, 0.05) 1px, transparent 1px);
-  background-size: 32px 32px;
-  mask-image: radial-gradient(120% 100% at 50% 40%, #000 40%, transparent 100%);
 }
 
 .dmap-svg {

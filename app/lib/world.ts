@@ -40,8 +40,9 @@ export function normalizeId(id: unknown, name = ''): string {
  * 抽卡主图会把单个国家放大到满屏。
  * 110m 国界对面积小的国家只有十来个顶点（斯里兰卡 10 个、荷兰 14 个），
  * 放大后就是一个多边形色块；新加坡、马耳他、萨摩亚甚至完全没有轮廓。
- * 这 29 个国家改由 `/data/detail-shapes.json` 描绘，由
- * `scripts/build-detail-shapes.mjs` 从 10m 数据按显示尺度简化生成（gzip 68KB）。
+ * 凡 110m 顶点数低于阈值（ROUGH_THRESHOLD）的收录国改由
+ * `/data/detail-shapes.json` 描绘（目前 92 个，约 1MB gzip），由
+ * `scripts/build-detail-shapes.mjs` 从 10m 数据按显示尺度简化生成。
  */
 
 /**
@@ -121,33 +122,59 @@ export function loadWorld(): Promise<WorldFeature[]> {  if (cache) return cache
   return cache
 }
 
-let detailCache: Promise<Map<string, WorldFeature>> | null = null
+let detailCache: Promise<DetailPatch> | null = null
+
+export interface DetailPatch {
+  /** 国家 id → 本国精细轮廓 */
+  self: Map<string, WorldFeature>
+  /**
+   * 国家 id → 该国视口范围内的邻国陆块。
+   * 与本国轮廓由同一套 10m 弧段简化而来，边界天生贴合，
+   * 用来替代和精细轮廓对不上的 110m 粗邻国（缝隙会漏出海色背景）。
+   * 跨反子午线的国家没有补丁，运行时退回 110m。
+   */
+  contexts: Map<string, WorldFeature[]>
+}
 
 /**
- * 小国的精细海岸线补丁（10m 数据源，按 1px 的显示精度做过 Douglas-Peucker 简化）。
- * 只影响抽卡主图；全球视图仍用 110m，避免首屏多下几百 KB。
+ * 小国的精细轮廓补丁 + 周边邻国陆块（10m 数据源，按 1px 的显示精度做过简化）。
+ * 只影响抽卡主图；全球视图仍用 110m，避免首屏多下几 MB。
  */
-export function loadDetailShapes(): Promise<Map<string, WorldFeature>> {
+export function loadDetailShapes(): Promise<DetailPatch> {
   if (detailCache) return detailCache
   detailCache = fetch('/data/detail-shapes.json')
     .then((r) => {
       if (!r.ok) throw new Error(`精细轮廓加载失败：${r.status}`)
-      return r.json() as Promise<{ features: { id: string; geometry: Geometry }[] }>
+      return r.json() as Promise<{
+        features: { id: string; geometry: Geometry }[]
+        contexts?: Record<string, { id: string; geometry: Geometry }[]>
+      }>
     })
     .then((fc) => {
-      const map = new Map<string, WorldFeature>()
-      for (const f of fc.features ?? []) {
-        if (!f?.geometry) continue
+      const toFeature = (f: { id: string; geometry: Geometry }): WorldFeature | null => {
+        if (!f?.geometry) return null
         const id = normalizeId(f.id)
-        map.set(id, {
+        return {
           type: 'Feature' as const,
           id,
           name: '',
           geometry: f.geometry,
           properties: {},
-        })
+        }
       }
-      return map
+      const self = new Map<string, WorldFeature>()
+      for (const f of fc.features ?? []) {
+        const wf = toFeature(f)
+        if (wf) self.set(wf.id, wf)
+      }
+      const contexts = new Map<string, WorldFeature[]>()
+      for (const [id, list] of Object.entries(fc.contexts ?? {})) {
+        const feats = (list ?? [])
+          .map(toFeature)
+          .filter((f): f is WorldFeature => !!f)
+        if (feats.length) contexts.set(normalizeId(id), feats)
+      }
+      return { self, contexts }
     })
     .catch((err: unknown) => {
       // 补丁拿不到不该让整张地图挂掉，退回 110m 即可
