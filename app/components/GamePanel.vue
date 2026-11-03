@@ -79,7 +79,9 @@ function onKey(e: KeyboardEvent) {
 
   if (key === 'enter') {
     e.preventDefault()
-    if (answered.value) next()
+    // 答对国家的确认停顿期间，Enter 跳过停顿直接进首都题
+    if (round.value.awaitCapital) game.advanceToCapital()
+    else if (answered.value) next()
     return
   }
 }
@@ -195,6 +197,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
               <button class="btn btn-dark" @click="next">下一题 →</button>
             </div>
           </template>
+          <!-- 答对国家的确认停顿：绿态和加分停留片刻，随后自动进入首都题 -->
+          <template v-else-if="round.awaitCapital">
+            <div class="res-main correct-pop">
+              <strong>答对了</strong>
+              <span class="mono">+{{ round.gained }} 分</span>
+              <span class="res-answer">追问首都，答对再 +1 分…</span>
+            </div>
+          </template>
           <template v-else-if="round.type === 'capital'">
             <div class="res-idle">
               <span class="mono">国家答对 +{{ round.gained }} 分，首都答对再 +1 分</span>
@@ -217,15 +227,29 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .game {
   display: grid;
   grid-template-columns: minmax(0, 1.32fr) minmax(360px, 0.88fr);
-  gap: 20px;
-  align-items: start;
+  gap: 24px;
 }
 
 /* ---------- 地图台面：与抽卡/全球视图同一套语言，不套卡片 ---------- */
+.g-left {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .g-stage {
   position: relative;
-  border-radius: 18px;
+  border-radius: var(--r-lg);
   overflow: hidden;
+  box-shadow: var(--shadow-soft);
+  flex: 1;
+}
+
+@media (min-width: 1121px) {
+  .g-stage :deep(.dmap) {
+    height: 100%;
+    aspect-ratio: auto;
+  }
 }
 
 .hud {
@@ -257,14 +281,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .hud-chip {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 13px;
+  gap: 5px;
+  padding: 4px 10px;
   border-radius: 999px;
   background: rgba(255, 253, 247, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.65);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 8px 22px -14px rgba(25, 23, 18, 0.5);
-  font-size: 10px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px -8px rgba(25, 23, 18, 0.45);
+  font-size: 9.5px;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--ink-2);
@@ -273,17 +297,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .hud-chip.soft {
   letter-spacing: 0.08em;
   text-transform: none;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
 }
 
 .chip-row {
   display: flex;
-  gap: 6px;
+  gap: 4px;
 }
 
 .stat-chip {
-  font-size: 11px;
+  font-size: 10px;
   letter-spacing: 0.04em;
   text-transform: none;
   color: var(--muted);
@@ -291,7 +315,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 .stat-chip b {
   color: var(--ink);
-  font-size: 13px;
+  font-size: 11.5px;
 }
 
 .g-skeleton {
@@ -306,12 +330,24 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 .g-panel {
   background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  box-shadow: var(--shadow-md);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-soft);
   padding: 20px 20px 18px;
   display: grid;
   gap: 14px;
+  /* 定高面板下 grid 默认 stretch 会把富余空间均摊给每行——
+     首都题少了提示块，行数变少、每行变高，选项就往下漂。
+     改为行贴顶排列，富余空间由 .g-result 的 margin-top:auto 吸收 */
+  align-content: start;
+}
+
+/* 大屏：面板定高（与 CountryDetail 的 .card-slot 同一函数），
+   提示逐条展开时行高不再变化，左侧地图不随答题进度“呼吸” */
+@media (min-width: 1121px) {
+  .g-panel {
+    height: clamp(560px, 68vh, 680px);
+    overflow-y: auto;
+  }
 }
 
 .g-q h2 {
@@ -331,7 +367,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   gap: 12px;
   width: 100%;
   padding: 12px 14px;
-  border-radius: 13px;
+  border-radius: var(--r-sm);
   border: 1px solid var(--line);
   background: #fffdf8;
   text-align: left;
@@ -355,11 +391,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .opt-letter {
   width: 22px;
   height: 22px;
-  border-radius: 7px;
+  border-radius: var(--r-xs);
   display: grid;
   place-items: center;
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 11px;
   background: var(--paper-2);
   color: var(--muted);
   flex: none;
@@ -391,7 +427,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
 .g-hints {
   border: 1px dashed var(--line-strong);
-  border-radius: 14px;
+  border-radius: var(--r-md);
   padding: 11px 13px;
 }
 
@@ -446,10 +482,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .hint-idx {
   width: 16px;
   height: 16px;
-  border-radius: 5px;
+  border-radius: var(--r-xs);
   display: grid;
   place-items: center;
-  font-size: 9px;
+  font-size: 10px;
   background: var(--paper-2);
   color: var(--muted);
   flex: none;
@@ -465,6 +501,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   border-top: 1px dashed var(--line);
   padding-top: 12px;
   min-height: 72px;
+  /* 吸收面板富余高度，把自己钉在底部——选项位置因此与阶段无关 */
+  margin-top: auto;
 }
 
 .res-main {
@@ -492,6 +530,32 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   font-size: 12px;
 }
 
+/* 答对国家的确认反馈：轻弹一下，提示文字用墨色而不是绿色 */
+.correct-pop {
+  animation: correct-pop 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.correct-pop .res-answer {
+  color: var(--muted);
+}
+
+@keyframes correct-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .correct-pop {
+    animation: none;
+  }
+}
+
 .res-answer {
   color: var(--ink-2);
 }
@@ -515,7 +579,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--muted);
   letter-spacing: 0.04em;
 }

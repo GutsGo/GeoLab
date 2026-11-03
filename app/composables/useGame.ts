@@ -26,6 +26,8 @@ export interface GameRound {
   ok: boolean | null
   /** 本轮累计得分：认出国家 2 分，连首都答对再 +1 */
   gained: number
+  /** 答对国家后的短暂确认停顿：让绿态和加分被看见，再自动进首都题 */
+  awaitCapital: boolean
 }
 
 export interface GameStats {
@@ -39,7 +41,17 @@ export interface GameStats {
 const GAME_KEY = 'geolab.game.v1'
 const BASE_SCORE_COUNTRY = 2
 const BASE_SCORE_CAPITAL = 1
+/** 答对国家的确认停顿时长：够看见绿态和加分，不至于拖节奏 */
+const ADVANCE_PAUSE_MS = 1200
 let persistenceBound = false
+let advanceTimer: ReturnType<typeof setTimeout> | null = null
+
+function cancelAdvance() {
+  if (advanceTimer) {
+    clearTimeout(advanceTimer)
+    advanceTimer = null
+  }
+}
 
 /** 提示阶梯：从模糊方位到决定性线索。注意不能漏首都——那是第二段的答案 */
 function hintsFor(c: Country): string[] {
@@ -155,13 +167,29 @@ export function useGame() {
       skipped: false,
       ok: null,
       gained: 0,
+      awaitCapital: false,
     }
     roundNo.value++
   }
 
   function clearRound() {
+    cancelAdvance()
     round.value = null
     roundNo.value = 0
+  }
+
+  /** 停顿结束：同一道题进入追问首都阶段，地图不动 */
+  function advanceToCapital() {
+    const r = round.value
+    if (!r || r.type !== 'country' || !r.awaitCapital) return
+    cancelAdvance()
+    r.type = 'capital'
+    r.options = buildOptions('capital', r.target)
+    r.answer = r.target.capital
+    r.hints = []
+    r.picked = null
+    r.ok = null
+    r.awaitCapital = false
   }
 
   /** capital 阶段放弃奖励分，直接看结果 */
@@ -199,13 +227,13 @@ export function useGame() {
           retryQueue.value = [...retryQueue.value, { id: round.target.id, at: roundNo.value }]
         }
       } else {
-        // 答对国家：同一道题进入追问首都阶段，地图不动
-        round.type = 'capital'
-        round.options = buildOptions('capital', round.target)
-        round.answer = round.target.capital
-        round.hints = []
-        round.picked = null
-        round.ok = null
+        // 答对国家：先停在确认态让反馈被看见，随后自动进入首都追问
+        round.awaitCapital = true
+        cancelAdvance()
+        advanceTimer = setTimeout(() => {
+          advanceTimer = null
+          advanceToCapital()
+        }, ADVANCE_PAUSE_MS)
       }
       return ok
     }
@@ -234,6 +262,7 @@ export function useGame() {
     skipBonus,
     reveal,
     answer,
+    advanceToCapital,
     reset,
     countryById,
   }
