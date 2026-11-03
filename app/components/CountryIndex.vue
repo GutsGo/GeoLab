@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { byContinent, CONTINENTS, CONTINENT_META } from '~/data'
 import type { Country } from '~/data/types'
 
@@ -8,9 +8,55 @@ const emit = defineEmits<{ (e: 'close'): void; (e: 'pick', id: string): void; (e
 
 const q = ref('')
 const inputEl = ref<HTMLInputElement | null>(null)
+const drawerEl = ref<HTMLElement | null>(null)
+
+/** 打开抽屉前记录焦点来源，关闭时归还——键盘用户才不会被丢在页面顶部 */
+let lastFocused: HTMLElement | null = null
 
 /** 模板里每行都判一次 seen.includes 是 O(n²)，换成 Set */
 const seenSet = computed(() => new Set(props.seen))
+
+/** 清空进度的两步确认：第一次点击进入待确认态，4 秒内再点才执行 */
+const confirming = ref(false)
+let confirmTimer: ReturnType<typeof setTimeout> | null = null
+
+function onResetClick() {
+  if (!confirming.value) {
+    confirming.value = true
+    if (confirmTimer) clearTimeout(confirmTimer)
+    confirmTimer = setTimeout(() => (confirming.value = false), 4000)
+    return
+  }
+  if (confirmTimer) clearTimeout(confirmTimer)
+  confirming.value = false
+  emit('reset')
+}
+
+/** Tab 圈闭：焦点只在抽屉内轮转 */
+function trapFocus(e: KeyboardEvent) {
+  if (e.key !== 'Tab') return
+  // ref 挂在 Motion 组件上，拿到的是实例；$el 才是真正的 <aside>
+  const inst = drawerEl.value as { $el?: HTMLElement } | HTMLElement | null
+  const root = inst && '$el' in inst ? (inst.$el as HTMLElement) : (inst as HTMLElement | null)
+  if (!root) return
+  const els = Array.from(
+    root.querySelectorAll<HTMLElement>('button, input, [tabindex]:not([tabindex="-1"])'),
+  ).filter((el) => !el.hasAttribute('disabled'))
+  if (!els.length) return
+  const first = els[0]
+  const last = els[els.length - 1]
+  if (!first || !last) return
+  const active = document.activeElement as HTMLElement | null
+  if (e.shiftKey) {
+    if (active === first || !root.contains(active)) {
+      e.preventDefault()
+      last.focus()
+    }
+  } else if (active === last || !root.contains(active)) {
+    e.preventDefault()
+    first.focus()
+  }
+}
 
 function hit(c: Country, k: string) {
   return (
@@ -39,11 +85,22 @@ watch(
   () => props.open,
   async (v) => {
     q.value = ''
-    if (!v) return
+    if (confirmTimer) clearTimeout(confirmTimer)
+    confirming.value = false
+    if (!v) {
+      lastFocused?.focus()
+      lastFocused = null
+      return
+    }
+    lastFocused = document.activeElement as HTMLElement | null
     await nextTick()
     inputEl.value?.focus()
   },
 )
+
+onBeforeUnmount(() => {
+  if (confirmTimer) clearTimeout(confirmTimer)
+})
 </script>
 
 <template>
@@ -63,11 +120,16 @@ watch(
       v-if="open"
       key="drawer"
       as="aside"
+      ref="drawerEl"
       class="drawer"
+      role="dialog"
+      aria-modal="true"
+      aria-label="国家与地区索引"
       :initial="{ x: '104%' }"
       :animate="{ x: 0 }"
       :exit="{ x: '104%' }"
       :transition="{ type: 'spring', stiffness: 320, damping: 34 }"
+      @keydown.capture="trapFocus"
     >
       <header class="d-head">
         <div class="d-head-row">
@@ -130,7 +192,14 @@ watch(
 
         <div class="d-foot">
           <span class="mono">已看过 {{ seen.length }} 个条目</span>
-          <button class="reset" @click="emit('reset')">清空学习进度</button>
+          <button
+            class="reset"
+            :data-armed="confirming"
+            @click="onResetClick"
+            @blur="confirming = false"
+          >
+            {{ confirming ? '再点一次确认清空' : '清空学习进度' }}
+          </button>
         </div>
       </div>
     </Motion>
@@ -180,7 +249,7 @@ watch(
   margin-top: 12px;
   padding: 0 10px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: var(--r-sm);
   border: 1px solid var(--line);
   background: #fffdf8;
   transition: border-color 0.16s ease, box-shadow 0.16s ease;
@@ -226,12 +295,12 @@ watch(
 }
 
 .s-hint {
-  font-size: 8.5px;
+  font-size: 10px;
   letter-spacing: 0.12em;
   color: #b3a98f;
   padding: 2px 5px;
   border: 1px solid var(--line);
-  border-radius: 4px;
+  border-radius: var(--r-xs);
 }
 
 .no-hit {
@@ -257,7 +326,7 @@ watch(
 .close {
   width: 30px;
   height: 30px;
-  border-radius: 9px;
+  border-radius: var(--r-sm);
   display: grid;
   place-items: center;
   color: var(--muted);
@@ -296,7 +365,7 @@ watch(
 
 .g-count {
   margin-left: auto;
-  font-size: 9.5px;
+  font-size: 10px;
   color: var(--muted);
 }
 
@@ -310,7 +379,7 @@ watch(
   align-items: center;
   gap: 9px;
   padding: 8px 10px;
-  border-radius: 10px;
+  border-radius: var(--r-sm);
   border: 1px solid transparent;
   text-align: left;
   transition: all 0.15s ease;
@@ -340,7 +409,7 @@ watch(
 
 .gi-en {
   margin-left: auto;
-  font-size: 9.5px;
+  font-size: 10px;
   letter-spacing: 0.08em;
   color: #b3a98f;
   text-transform: uppercase;
@@ -357,7 +426,7 @@ watch(
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 10px;
+  font-size: 10.5px;
   letter-spacing: 0.1em;
   color: var(--muted);
 }
@@ -367,13 +436,21 @@ watch(
   letter-spacing: 0.04em;
   color: #a16207;
   border: 1px solid #e8dcbd;
-  border-radius: 8px;
+  border-radius: var(--r-sm);
   padding: 5px 9px;
   background: #fdf8ea;
+  transition: all 0.16s ease;
 }
 
 .reset:hover {
   background: #fbf1d8;
+}
+
+/* 待确认态：从琥珀提示切换成明确的危险红，颜色即状态 */
+.reset[data-armed='true'] {
+  background: #b91c1c;
+  border-color: #b91c1c;
+  color: #fff;
 }
 
 .gi-dot {

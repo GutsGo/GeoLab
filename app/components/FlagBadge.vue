@@ -112,7 +112,7 @@ onBeforeUnmount(() => {
 .fb {
   position: relative;
   aspect-ratio: 3 / 2;
-  border-radius: 7px;
+  border-radius: var(--r-xs);
   overflow: hidden;
   background: linear-gradient(160deg, #f6f1e4, #ece4d1);
   box-shadow:
@@ -125,7 +125,7 @@ onBeforeUnmount(() => {
 /* 小尺寸场景（列表、胶囊标签）：去掉大阴影只留描边 */
 .fb.flat {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1);
-  border-radius: 4px;
+  border-radius: var(--r-xs);
 }
 
 .fb-emoji {

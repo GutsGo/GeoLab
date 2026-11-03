@@ -66,12 +66,11 @@ function onPick(id: string) {
   view.value = 'draw'
 }
 
+/** 二次确认在索引抽屉内完成，这里只负责执行 */
 function onReset() {
-  if (window.confirm('清空所有已解锁记录？')) {
-    deck.resetProgress()
-    indexOpen.value = false
-    flash('学习进度已清空')
-  }
+  deck.resetProgress()
+  indexOpen.value = false
+  flash('学习进度已清空')
 }
 
 function onMapPick(id: string) {
@@ -215,8 +214,10 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <!-- ============ 抽卡视图 ============ -->
-    <template v-if="view === 'draw'">
+    <!-- ============ 主内容区：三个视图共用一个 main，flex:1 把 footer 顶到视口底 ============ -->
+    <main class="views">
+      <!-- ============ 抽卡视图 ============ -->
+      <template v-if="view === 'draw'">
       <div class="filter-row">
         <div class="chips">
           <button v-for="f in ['全部', ...deck.CONTINENTS]" :key="f" class="chip" :data-active="filter === f"
@@ -258,15 +259,17 @@ onBeforeUnmount(() => {
                   </Motion>
                 </AnimatePresence>
               </div>
-              <div class="map-actions">
-                <button class="btn icon-btn" :disabled="!canBack" title="上一个 (←)" @click="deck.back()">←</button>
-                <Motion as="button" class="draw-btn" :while-hover="{ y: -2 }" :while-tap="{ scale: 0.96 }"
-                  :transition="{ type: 'spring', stiffness: 420, damping: 26 }" @click="draw">
-                  抽取一个
-                  <small>SPACE</small>
-                </Motion>
-              </div>
             </div>
+          </div>
+
+          <!-- 操作条在地图外：不遮挡地图主体，移动端也不会误触 -->
+          <div class="map-actions-bar">
+            <button class="btn icon-btn" :disabled="!canBack" title="上一个 (←)" @click="deck.back()">←</button>
+            <Motion as="button" class="draw-btn" :while-hover="{ y: -2 }" :while-tap="{ scale: 0.96 }"
+              :transition="{ type: 'spring', stiffness: 420, damping: 26 }" @click="draw">
+              抽取一个
+              <small>SPACE</small>
+            </Motion>
           </div>
         </section>
 
@@ -306,14 +309,13 @@ onBeforeUnmount(() => {
               <span><i class="swatch" style="background: #ece6d7; border: 1px solid #dcd3bd"></i>其他国家</span>
               <span><i class="swatch" :style="{ background: accent }"></i>当前目标</span>
             </div>
-            <button class="btn" :disabled="!currentId" @click="switchView('draw')">回到抽卡</button>
           </div>
         </section>
 
         <div class="globe-side">
           <div class="side-card">
             <div class="side-head">
-              <span class="kicker">大洲进度</span>
+              <span class="kicker">学习进度</span>
               <span class="mono dim">{{ seenPct }}%</span>
             </div>
             <div class="continent-board">
@@ -330,13 +332,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </div>
-          </div>
-
-          <div class="side-card">
-            <div class="side-head">
-              <span class="kicker">学习记录</span>
-            </div>
-            <div class="stat-list">
+            <div class="stat-strip">
               <div class="stat-row">
                 <span>已解锁国家</span>
                 <b class="mono">{{ seenCount }} / {{ total }}</b>
@@ -346,11 +342,6 @@ onBeforeUnmount(() => {
                 <b class="mono">{{ remaining }} / {{ pools.length }}</b>
               </div>
             </div>
-          </div>
-
-          <div class="side-card tip-card">
-            <div class="kicker">怎么用</div>
-            <p>单国地图会逐笔描绘轮廓；要定位可切到全球视图，点击国家即可返回。</p>
           </div>
         </div>
       </div>
@@ -369,6 +360,7 @@ onBeforeUnmount(() => {
       </div>
       <GamePanel @open="onGameOpen" />
     </template>
+    </main>
 
     <footer class="foot-note">
       <span class="mono">共 {{ total }} 个国家与地区</span>
@@ -385,12 +377,17 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+/* 主内容区：撑满 .shell 里 topbar 与 footer 之间的剩余空间 */
+.views {
+  flex: 1 0 auto;
+}
+
 /* ---------- 顶部视图切换 ---------- */
 .view-switch {
   display: inline-flex;
   padding: 3px;
   gap: 2px;
-  border-radius: 10px;
+  border-radius: var(--r-sm);
   border: 1px solid var(--line);
   background: var(--card);
   box-shadow: var(--shadow-sm);
@@ -399,8 +396,9 @@ onBeforeUnmount(() => {
 .vs-btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   padding: 10px 14px;
-  border-radius: 8px;
+  border-radius: var(--r-sm);
   color: var(--muted);
   transition:
     background 0.18s ease,
@@ -445,7 +443,7 @@ onBeforeUnmount(() => {
 }
 
 .pool-hint {
-  font-size: 10.5px;
+  font-size: 11px;
   letter-spacing: 0.1em;
   color: var(--muted);
   display: inline-flex;
@@ -459,9 +457,9 @@ onBeforeUnmount(() => {
 
 kbd {
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 10px;
   padding: 2px 5px;
-  border-radius: 4px;
+  border-radius: var(--r-xs);
   border: 1px solid var(--line-strong);
   background: #fffdf8;
   color: var(--ink-2);
@@ -519,23 +517,50 @@ kbd {
 }
 
 .map-side {
-  display: grid;
-  /* minmax(0, 1fr) 而非 1fr：否则轨道会按最宽子项的 min-content 撑开，
-     下面 .recent-strip 的 nowrap 标签能把整列顶到 443px，移动端就横向溢出了 */
-  grid-template-columns: minmax(0, 1fr);
-  gap: 14px;
+  /* flex 列 + min-width:0：既防溢出，又让 .map-stage 能拉伸到与卡片等高 */
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   min-width: 0;
 }
 
 .card-slot {
-  min-height: 620px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
-/* ---------- 地图台面：不再套卡片，地图自身的海面就是背景 ---------- */
+/* 大屏：右栏高度钉死为视口函数（不随卡片内容变化）——
+   行高恒定，左侧地图不再随切卡“呼吸” */
+@media (min-width: 1121px) {
+  .card-slot {
+    height: clamp(560px, 68vh, 680px);
+  }
+}
+
+/* Motion 的包裹 div：拉满定高列，让卡片垂直填满 */
+.card-slot > div {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 大屏：地图放开宽高比，随列高拉伸；海面渐变填满，
+   地形经 preserveAspectRatio 居中不变形 */
+@media (min-width: 1121px) {
+  .map-stage :deep(.dmap) {
+    height: 100%;
+    aspect-ratio: auto;
+  }
+}
+
+/* ---------- 地图台面：不套卡片，海面自身就是背景，柔影定边界 ---------- */
 .map-stage {
   position: relative;
-  border-radius: 18px;
+  border-radius: var(--r-lg);
   overflow: hidden;
+  box-shadow: var(--shadow-soft);
+  flex: 1;
 }
 
 /* 悬浮信息层：只放信息，不铺底色，让地图保持完整 */
@@ -569,13 +594,13 @@ kbd {
 .hud-chip {
   display: inline-flex;
   align-items: center;
-  padding: 7px 13px;
+  padding: 4px 10px;
   border-radius: 999px;
   background: rgba(255, 253, 247, 0.72);
   border: 1px solid rgba(255, 255, 255, 0.65);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 8px 22px -14px rgba(25, 23, 18, 0.5);
-  font-size: 10px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px -8px rgba(25, 23, 18, 0.45);
+  font-size: 9.5px;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--ink-2);
@@ -584,7 +609,7 @@ kbd {
 .hud-chip.soft {
   letter-spacing: 0.08em;
   text-transform: none;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--muted);
 }
 
@@ -626,15 +651,17 @@ kbd {
 
 .cur-en {
   font-family: var(--sans);
-  font-size: 10.5px;
+  font-size: 11px;
   letter-spacing: 0.14em;
   color: var(--muted);
   text-transform: uppercase;
 }
 
-.map-actions {
+/* 操作条：地图下方的固定控件位，不随取景漂移、不遮挡内容 */
+.map-actions-bar {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -646,15 +673,12 @@ kbd {
 
 .globe-side {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  align-items: start;
 }
 
 .side-card {
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: rgba(255, 253, 247, 0.82);
+  border-radius: var(--r-md);
+  background: var(--card);
+  box-shadow: var(--shadow-soft);
   padding: 14px 16px 16px;
 }
 
@@ -672,8 +696,9 @@ kbd {
 
 .continent-board {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 11px;
+  /* 六大洲自适应排布：宽卡 3 列 × 2 行，窄屏自动减列 */
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px 20px;
 }
 
 .cb-top {
@@ -689,7 +714,7 @@ kbd {
 }
 
 .cb-num {
-  font-size: 9.5px;
+  font-size: 10px;
   color: var(--muted);
 }
 
@@ -706,9 +731,18 @@ kbd {
   transition: width 0.5s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.stat-list {
-  display: grid;
-  gap: 9px;
+/* 合并后的统计行：横排在大洲进度下方，虚线分隔 */
+.stat-strip {
+  display: flex;
+  gap: 28px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+
+.stat-strip .stat-row {
+  border-bottom: none;
+  padding-bottom: 0;
 }
 
 .stat-row {
@@ -718,25 +752,11 @@ kbd {
   gap: 12px;
   font-size: 12px;
   color: var(--ink-2);
-  border-bottom: 1px dashed var(--line);
-  padding-bottom: 8px;
-}
-
-.stat-row:last-child {
-  border-bottom: none;
-  padding-bottom: 0;
 }
 
 .stat-row b {
   font-size: 12.5px;
   color: var(--ink);
-}
-
-.tip-card p {
-  font-size: 12px;
-  line-height: 1.8;
-  color: var(--muted);
-  margin-top: 8px;
 }
 
 /* ---------- 挑战视图 ---------- */
@@ -768,7 +788,7 @@ kbd {
   margin-top: 26px;
   padding-top: 14px;
   border-top: 1px solid var(--line);
-  font-size: 10px;
+  font-size: 10.5px;
   letter-spacing: 0.08em;
   color: var(--muted);
   flex-wrap: wrap;
@@ -778,15 +798,6 @@ kbd {
   .card-slot {
     min-height: 0;
   }
-
-  .globe-side {
-    grid-template-columns: 1fr 1fr;
-    display: grid;
-  }
-
-  .tip-card {
-    grid-column: 1 / -1;
-  }
 }
 
 @media (max-width: 720px) {
@@ -795,13 +806,13 @@ kbd {
   }
 
   .view-switch {
+    /* 不满宽：保持内容宽度，独占一行时居中 */
     order: 3;
-    width: 100%;
+    margin-inline: auto;
   }
 
   .vs-btn {
-    flex: 1;
-    align-items: center;
+    justify-content: center;
   }
 
   .hud {
@@ -809,21 +820,17 @@ kbd {
     right: 12px;
   }
 
-  .map-actions {
-    width: 100%;
+  .map-actions-bar {
+    justify-content: stretch;
   }
 
-  .map-actions .draw-btn {
+  .map-actions-bar .draw-btn {
     flex: 1;
     justify-content: center;
   }
 
   .cur-name {
     font-size: 22px;
-  }
-
-  .globe-side {
-    grid-template-columns: 1fr;
   }
 }
 </style>

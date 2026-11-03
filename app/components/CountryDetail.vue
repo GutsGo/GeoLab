@@ -56,6 +56,26 @@ const nearby = computed(() => {
   if (!c) return []
   return byContinent[c.continent].filter((x) => x.id !== c.id).slice(0, 7)
 })
+
+/** tablist 方向键导航：←/→ 移动并激活，Home/End 跳两端 */
+function onTabKeydown(e: KeyboardEvent) {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return
+  const list = tabs.value
+  if (!list.length) return
+  e.preventDefault()
+  const idx = list.findIndex((t) => t.key === tab.value)
+  let next = idx
+  if (e.key === 'ArrowRight') next = (idx + 1) % list.length
+  else if (e.key === 'ArrowLeft') next = (idx - 1 + list.length) % list.length
+  else if (e.key === 'Home') next = 0
+  else next = list.length - 1
+  const target = list[next]
+  if (!target) return
+  tab.value = target.key
+  // 焦点跟着激活项走，符合 WAI-ARIA tabs 的 roving tabindex 惯例
+  const btn = (e.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('.tab')[next]
+  btn?.focus()
+}
 </script>
 
 <template>
@@ -91,13 +111,16 @@ const nearby = computed(() => {
         </div>
       </div>
 
-      <div class="tabs" role="tablist">
+      <div class="tabs" role="tablist" aria-label="国家资料分区" @keydown="onTabKeydown">
         <button
           v-for="t in tabs"
           :key="t.key"
           class="tab"
           role="tab"
+          :id="`tab-${t.key}`"
           :aria-selected="tab === t.key"
+          :aria-controls="`pane-${t.key}`"
+          :tabindex="tab === t.key ? 0 : -1"
           :data-active="tab === t.key"
           @click="tab = t.key"
         >
@@ -106,7 +129,14 @@ const nearby = computed(() => {
       </div>
 
       <div class="body scroll-thin">
-        <div v-if="tab === 'overview'" :key="`ov-${country.id}`" class="pane">
+        <div
+          v-if="tab === 'overview'"
+          :key="`ov-${country.id}`"
+          id="pane-overview"
+          role="tabpanel"
+          aria-labelledby="tab-overview"
+          class="pane"
+        >
           <p class="prose">{{ country.intro }}</p>
 
           <div class="divider" style="margin: 16px 0"></div>
@@ -157,13 +187,25 @@ const nearby = computed(() => {
           </div>
         </div>
 
-        <div v-else-if="tab === 'history'" class="pane">
+        <div
+          v-else-if="tab === 'history'"
+          id="pane-history"
+          role="tabpanel"
+          aria-labelledby="tab-history"
+          class="pane"
+        >
           <div class="section-title">历史时间线</div>
           <p class="prose">{{ country.history }}</p>
           <div class="hint">记忆点：把这段历史压缩成一个"起点—转折—现状"的三段式，往往更容易记住。</div>
         </div>
 
-        <div v-else-if="tab === 'culture'" class="pane">
+        <div
+          v-else-if="tab === 'culture'"
+          id="pane-culture"
+          role="tabpanel"
+          aria-labelledby="tab-culture"
+          class="pane"
+        >
           <div class="section-title">人文与日常</div>
           <p class="prose">{{ country.culture }}</p>
           <div class="divider" style="margin: 16px 0"></div>
@@ -179,7 +221,13 @@ const nearby = computed(() => {
           </div>
         </div>
 
-        <div v-else-if="tab === 'landmarks'" class="pane">
+        <div
+          v-else-if="tab === 'landmarks'"
+          id="pane-landmarks"
+          role="tabpanel"
+          aria-labelledby="tab-landmarks"
+          class="pane"
+        >
           <div v-for="(l, i) in country.landmarks" :key="l.name" class="list-item">
             <div class="list-title">
               <span class="num-badge">{{ String(i + 1).padStart(2, '0') }}</span>
@@ -189,7 +237,13 @@ const nearby = computed(() => {
           </div>
         </div>
 
-        <div v-else-if="tab === 'foods'" class="pane">
+        <div
+          v-else-if="tab === 'foods'"
+          id="pane-foods"
+          role="tabpanel"
+          aria-labelledby="tab-foods"
+          class="pane"
+        >
           <div v-for="(f, i) in country.foods" :key="f.name" class="list-item">
             <div class="list-title">
               <span class="num-badge">{{ String(i + 1).padStart(2, '0') }}</span>
@@ -199,7 +253,7 @@ const nearby = computed(() => {
           </div>
         </div>
 
-        <div v-else class="pane">
+        <div v-else id="pane-map" role="tabpanel" aria-labelledby="tab-map" class="pane">
           <div class="city-bar">
             <div class="cb-left">
               <div class="stat-label">{{ highlightCity ? '本次抽到' : '城市速览' }}</div>
@@ -263,13 +317,15 @@ const nearby = computed(() => {
 .detail {
   display: flex;
   flex-direction: column;
-  min-height: 560px;
-  max-height: 720px;
+  /* 行高由 .card-slot 的定高（视口函数）决定，卡片 flex:1 填满；
+     内容长短差异由 body 内部滚动消化 —— 地图高度不受切卡影响。
+     min-height:0 允许卡片收缩到列高内，避免长内容把行撑破 */
+  flex: 1;
+  min-height: 0;
 }
 
 @media (max-width: 1120px) {
   .detail {
-    max-height: none;
     min-height: 0;
   }
 }
@@ -293,7 +349,7 @@ const nearby = computed(() => {
 .flag-box {
   flex: none;
   padding: 4px;
-  border-radius: 9px;
+  border-radius: var(--r-sm);
   background: #fff;
   border: 1px solid var(--line);
   box-shadow: var(--shadow-sm);
@@ -303,7 +359,7 @@ const nearby = computed(() => {
 .flag {
   width: 84px;
   height: 56px;
-  border-radius: 5px;
+  border-radius: var(--r-xs);
 }
 
 .flag-fallback {
@@ -345,7 +401,7 @@ const nearby = computed(() => {
 }
 
 .section-title {
-  font-size: 10px;
+  font-size: 10.5px;
   letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--muted);
@@ -366,7 +422,7 @@ const nearby = computed(() => {
 
 .bar-pct {
   text-align: right;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--muted);
 }
 
@@ -423,7 +479,7 @@ const nearby = computed(() => {
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  border-radius: 10px;
+  border-radius: var(--r-sm);
   border: 1px solid var(--line);
   background: #fffdf8;
   font-size: 12.5px;
@@ -444,17 +500,17 @@ const nearby = computed(() => {
 }
 
 .cap-tag {
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.12em;
   color: var(--muted);
   border: 1px solid var(--line);
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--r-xs);
 }
 
 .coord {
   margin-left: auto;
-  font-size: 10px;
+  font-size: 10.5px;
   color: var(--muted);
 }
 
@@ -465,7 +521,7 @@ const nearby = computed(() => {
   gap: 10px;
   padding: 10px 12px;
   margin-bottom: 12px;
-  border-radius: 12px;
+  border-radius: var(--r-sm);
   border: 1px dashed var(--line-strong);
   background: #fffdf8;
 }
@@ -496,7 +552,7 @@ const nearby = computed(() => {
 
 .on-tag {
   margin-left: auto;
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.1em;
   padding: 1px 6px;
   border-radius: 999px;
@@ -506,7 +562,7 @@ const nearby = computed(() => {
 
 .city-note {
   margin-top: 10px;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--muted);
   line-height: 1.6;
 }
@@ -526,7 +582,7 @@ const nearby = computed(() => {
 }
 
 .foot-hint {
-  font-size: 10px;
+  font-size: 10.5px;
   letter-spacing: 0.1em;
   color: var(--muted);
 }
