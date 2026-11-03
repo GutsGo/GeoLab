@@ -2,11 +2,14 @@ import { computed, effectScope, watch } from 'vue'
 import { countries, byContinent, countryById, CONTINENTS } from '~/data'
 import type { Continent, Country } from '~/data/types'
 import { pickOne, shuffle } from '~/lib/random'
+import { useSRS } from '~/composables/useSRS'
 
 export type Filter = '全部' | Continent
 
 const STORAGE_KEY = 'geolab.seen.v1'
 const HISTORY_LIMIT = 40
+/** 每抽 N 次插一次到期复习（范围内有到期国家时生效） */
+const REVIEW_EVERY = 3
 
 /** 保证持久化 watcher 只绑定一次，且不随调用方组件卸载而失效 */
 let persistenceBound = false
@@ -19,6 +22,12 @@ export function useDeck() {
   const history = useState<string[]>('geo-history', () => [])
   const hydrated = useState<boolean>('geo-hydrated', () => false)
   const pickedCity = useState<string>('geo-picked-city', () => '')
+  /** 抽卡计数：用于按 REVIEW_EVERY 插入到期复习 */
+  const drawCount = useState<number>('geo-draw-count', () => 0)
+  /** 最近一次抽中的复习国家 id（空串表示本次不是复习抽），供 UI 弹提示 */
+  const lastDrawReview = useState<string>('geo-last-review', () => '')
+
+  const srs = useSRS()
 
   const pools = computed(() => (filter.value === '全部' ? countries : byContinent[filter.value]))
   const current = computed<Country | null>(() =>
@@ -49,12 +58,26 @@ export function useDeck() {
     }),
   )
 
+  /** 当前筛选范围内，SRS 已到期待复习的国家数 */
+  const dueCount = computed(() => {
+    const due = new Set(srs.dueIds.value)
+    let n = 0
+    for (const c of pools.value) if (due.has(c.id)) n++
+    return n
+  })
+
+  /** 上次看到某国距今天数；从未登记返回 null */
+  function seenDaysAgo(id: string): number | null {
+    return srs.seenDaysAgo(id)
+  }
+
   /** history 第一个是当前，第二个才是"上一个" */
   const canBack = computed(() => history.value.length > 1)
 
   function hydrate() {
     if (hydrated.value || typeof window === 'undefined') return
     hydrated.value = true
+    srs.hydrate()
     try {
       const raw = localStorage.getItem(STORAGE_KEY)
       if (raw) {
@@ -90,17 +113,32 @@ export function useDeck() {
     if (!seenSet.value.has(id)) seen.value = [...seen.value, id]
   }
 
-  /** 记录一次"看到"，顺带推进历史 */
+  /** 记录一次"看到"，顺带推进历史，并登记 SRS（到期即算重温） */
   function remember(id: string) {
     markSeen(id)
     history.value = [id, ...history.value.filter((x) => x !== id)].slice(0, HISTORY_LIMIT)
+    srs.view(id)
   }
 
-  /** 抽一个：优先没看过的，其次同范围随机，最后全量随机 */
+  /** 抽一个：到期复习优先插队，其次没看过的，最后同范围随机 */
   function draw(): Country | null {
     pickedCity.value = ''
+    lastDrawReview.value = ''
     const list = pools.value
     if (!list.length) return null
+    drawCount.value++
+
+    // 每抽 REVIEW_EVERY 次，若当前范围内有到期国家，插一次复习（取最久未见的那个）
+    if (drawCount.value % REVIEW_EVERY === 0) {
+      const due = srs.dueIds.value.filter((id) => id !== currentId.value && list.some((c) => c.id === id))
+      if (due.length) {
+        const oldest = due.reduce((a, b) => ((srs.dueOf(a) ?? 0) <= (srs.dueOf(b) ?? 0) ? a : b))
+        currentId.value = oldest
+        lastDrawReview.value = oldest
+        remember(oldest)
+        return countryById.get(oldest) ?? null
+      }
+    }
 
     const unseen = list.filter((c) => !seenSet.value.has(c.id))
     let nextId: string | undefined
@@ -166,6 +204,8 @@ export function useDeck() {
     pool.value = []
     currentId.value = ''
     pickedCity.value = ''
+    lastDrawReview.value = ''
+    srs.reset()
   }
 
   return {
@@ -185,6 +225,9 @@ export function useDeck() {
     poolCleared,
     canBack,
     continentStats,
+    dueCount,
+    lastDrawReview,
+    seenDaysAgo,
     hydrated,
     hydrate,
     draw,
