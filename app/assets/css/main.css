@@ -1,22 +1,36 @@
+@import "@fontsource/noto-serif-sc/400.css";
+@import "@fontsource/noto-serif-sc/600.css";
+
 :root {
   --paper: #f7f4ec;
   --paper-2: #f1ece0;
-  --card: #fffdf7;
+  /* 面板层：比纸面亮足一档，无边框时靠它和柔投影分层 */
+  --card: #fffefb;
   --ink: #191712;
   --ink-2: #46402f;
-  --muted: #837b68;
+  /* #837b68 在纸底上只有 ~3.8:1，达不到 AA；加深到 5.4:1，小字也不糊 */
+  --muted: #6f6753;
   --line: #e3dccb;
   --line-strong: #cfc5ad;
   --ocean: #e6eef1;
   --land: #e7e1d2;
   --land-2: #efeade;
   --accent: #1d4ed8;
+  /* 阴影收紧：纸感界面靠"边缘 + 浅投影"立起来，大模糊的通用投影会显得漂浮 */
+  /* 圆角三档：xs=微章标签、sm=按钮输入、md=卡片面板、lg=地图台面。胶囊（999px）是形状语言不进档位 */
+  --r-xs: 6px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 18px;
   --shadow-sm:
-    0 1px 2px rgba(60, 50, 30, 0.05), 0 8px 24px -16px rgba(60, 50, 30, 0.35);
-  --shadow-md:
-    0 2px 4px rgba(60, 50, 30, 0.06), 0 24px 48px -28px rgba(60, 50, 30, 0.4);
+    0 1px 0 rgba(60, 50, 30, 0.04), 0 6px 16px -12px rgba(60, 50, 30, 0.3);
+  /* 无边框面板专用：只有一层向下渐散的软影，够定边界、不构成"描边感" */
+  --shadow-soft:
+    0 1px 0 rgba(60, 50, 30, 0.02), 0 18px 36px -30px rgba(60, 50, 30, 0.55);
+  /* display 字体链：macOS 走本地宋体，Windows/Android 命中自托管的
+     Noto Serif SC（@fontsource 按 unicode-range 分片，只下载用到的子集） */
   --serif:
-    "Songti SC", "Noto Serif SC", "Source Han Serif SC", Georgia,
+    "Songti SC", "STSong", "Noto Serif SC", "Source Han Serif SC", Georgia,
     "Times New Roman", serif;
   --sans:
     -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
@@ -26,6 +40,25 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* 键盘导航的焦点态：虚线 + currentColor，跟满版的 dashed 线同一语言。
+   深色按钮上 currentColor 是纸色，浅色按钮上是墨色，两种底都看得见。 */
+:focus-visible {
+  outline: 2px dashed currentColor;
+  outline-offset: 3px;
+}
+
+/* 动效兜底：用户系统级关掉动画时，所有过渡/动画瞬时完成 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 html,
@@ -87,6 +120,12 @@ a {
   max-width: 1480px;
   margin: 0 auto;
   padding: 0 28px 96px;
+  /* flex 列 + 最小视口高：主内容区 flex:1 吃掉剩余空间，
+     footer 才能贴到视口底部，而不是悬在内容流的末尾 */
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 @media (max-width: 720px) {
@@ -114,7 +153,7 @@ a {
 .brand-mark {
   width: 38px;
   height: 38px;
-  border-radius: 12px;
+  border-radius: var(--r-sm);
   background: var(--ink);
   color: #fdf8ea;
   display: grid;
@@ -160,11 +199,11 @@ a {
 }
 
 /* ---------- stage ---------- */
+/* 两栏等高：行高 = max(卡片自然高度封顶, 地图宽高比高度)，地图列拉伸补齐 */
 .stage {
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(390px, 0.9fr);
-  gap: 20px;
-  align-items: start;
+  gap: 24px;
 }
 
 @media (max-width: 1120px) {
@@ -173,18 +212,11 @@ a {
   }
 }
 
-.panel {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  box-shadow: var(--shadow-sm);
-}
-
 /* ---------- map ---------- */
 .map-wrap {
   position: relative;
   overflow: hidden;
-  border-radius: 14px;
+  border-radius: var(--r-md);
   background: linear-gradient(180deg, #eef4f6 0%, #e3edf0 100%);
 }
 
@@ -207,13 +239,13 @@ a {
 
 .legend {
   display: flex;
-  gap: 12px;
-  font-size: 10.5px;
+  gap: 10px;
+  font-size: 10px;
   letter-spacing: 0.06em;
   color: #5b6b70;
   background: rgba(255, 253, 247, 0.78);
   backdrop-filter: blur(8px);
-  padding: 6px 10px;
+  padding: 4px 9px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.7);
 }
@@ -238,7 +270,7 @@ a {
   justify-content: center;
   gap: 8px;
   padding: 11px 18px;
-  border-radius: 12px;
+  border-radius: var(--r-sm);
   border: 1px solid var(--line-strong);
   background: var(--card);
   font-size: 13px;
@@ -287,7 +319,7 @@ a {
   align-items: center;
   gap: 12px;
   padding: 13px 26px 13px 20px;
-  border-radius: 10px;
+  border-radius: var(--r-sm);
   background: var(--ink);
   color: #fdf9ee;
   font-size: 15px;
@@ -350,11 +382,11 @@ a {
 }
 
 /* ---------- detail card ---------- */
+/* 无边框：与地图台面同一套沉浸语言，底色提亮 + 柔影定边 */
 .card {
   background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  box-shadow: var(--shadow-md);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-soft);
   overflow: hidden;
 }
 
@@ -365,7 +397,7 @@ a {
 }
 
 .flag {
-  border-radius: 6px;
+  border-radius: var(--r-xs);
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.08),
     0 6px 18px -10px rgba(0, 0, 0, 0.5);
@@ -375,7 +407,7 @@ a {
 }
 
 .kicker {
-  font-size: 10px;
+  font-size: 10.5px;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: var(--muted);
@@ -410,7 +442,7 @@ a {
 .tab {
   flex: none;
   padding: 8px 12px;
-  border-radius: 9px;
+  border-radius: var(--r-sm);
   font-size: 12.5px;
   color: var(--muted);
   position: relative;
@@ -440,7 +472,7 @@ a {
 }
 
 .stat-label {
-  font-size: 10px;
+  font-size: 10.5px;
   letter-spacing: 0.14em;
   color: var(--muted);
   text-transform: uppercase;
@@ -504,7 +536,7 @@ a {
 .num-badge {
   width: 18px;
   height: 18px;
-  border-radius: 6px;
+  border-radius: var(--r-xs);
   display: inline-grid;
   place-items: center;
   font-size: 10px;
@@ -517,7 +549,7 @@ a {
 .note {
   background: #fbf3dd;
   border: 1px solid #ecdfb9;
-  border-radius: 12px;
+  border-radius: var(--r-sm);
   padding: 12px 14px;
   font-size: 12.5px;
   line-height: 1.75;
