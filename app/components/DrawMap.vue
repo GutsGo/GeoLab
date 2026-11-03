@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
-import { geoCentroid, geoMercator, geoPath } from 'd3-geo'
+import { geoBounds, geoCentroid, geoMercator, geoPath } from 'd3-geo'
 import { loadDetailShapes, loadWorld, type DetailPatch, type WorldFeature } from '~/lib/world'
 import { countryById } from '~/data'
 import { traceLayers } from '~/lib/shapes'
@@ -146,6 +146,35 @@ const projection = computed(() => {
             ],
         f,
       )
+      // 大国也配位置小图：本体若压到右下角的图框，就换用避让它的取景框。
+      // 位置小图在右下角，剩下的空间是 L 形——「压高度」和「压宽度」两臂，
+      // 各试一次取景，挑缩放倍率更高的那支，尽量少牺牲画面。
+      if (!smallView.value && wide.value && props.showLabels) {
+        const b = geoPath(p).bounds(f)
+        const pad = 12
+        const hit =
+          b[1][0] > INSET.x - pad &&
+          b[0][0] < INSET.x + INSET.w + pad &&
+          b[1][1] > INSET.y - pad &&
+          b[0][1] < INSET.y + INSET.h + pad
+        if (hit) {
+          const fitArm = (box: [[number, number], [number, number]]) => {
+            const q = geoMercator().rotate([-center[0], 0]).center([0, center[1]])
+            q.fitExtent(box, f)
+            return q
+          }
+          const squat = fitArm([
+            [58, 52],
+            [W - 58, INSET.y - pad],
+          ])
+          const slim = fitArm([
+            [58, 52],
+            [INSET.x - pad, H - 52],
+          ])
+          const q = squat.scale() >= slim.scale() ? squat : slim
+          p.scale(q.scale()).translate(q.translate())
+        }
+      }
       if (!Number.isFinite(p.scale())) throw new Error('bad scale')
     } catch {
       p.scale(H * 1.3).translate([W / 2, H / 2])
@@ -571,14 +600,14 @@ const contextShapes = computed(() => {
 /**
  * 右下角的「位置」小图。
  * 把一座岛放大到满是很好，但放大之后就不知道它在哪了，
- * 所以旁边配一张 26° 见方的区域图：邻国做浅色参照，本国用一个定位环标出。
+ * 所以旁边配一张区域图：视野随本国跨度伸缩（小国 26° 起），邻国做浅色参照，本国用定位环标出。
  */
 const INSET = { x: W - 28 - 208, y: H - 26 - 138, w: 208, h: 138 }
 const clipId = `dm-clip-${uid}`
 
 const inset = computed(() => {
-  // 答题视图给位置图等于报答案，只让抽卡视图看
-  if (!smallView.value || !props.showLabels) return null
+  // 答题视图给位置图等于报答案；窄屏上 CSS 会隐藏它，白算
+  if (!props.showLabels || !wide.value) return null
   const f = frame.value ?? detailed.value
   const list = all.value
   if (!f || !list) return null
@@ -590,7 +619,18 @@ const inset = computed(() => {
   }
   if (!Number.isFinite(c[0]) || !Number.isFinite(c[1])) return null
 
-  const span = 26
+  // 视野随国家实际跨度走：小国保持 26° 的街区视角，
+  // 大国若也用 26°，框里装不下本体，「位置」图就失去参照意义
+  let span = 26
+  try {
+    const bb = geoBounds(f) as [[number, number], [number, number]]
+    // 跨反子午线时 west > east，补 360 回环
+    const lng = bb[1][0] - bb[0][0] + (bb[1][0] < bb[0][0] ? 360 : 0)
+    const lat = bb[1][1] - bb[0][1]
+    span = Math.min(200, Math.max(26, lng * 1.35, lat * 1.35))
+  } catch {
+    /* 保持 26 */
+  }
   const p = geoMercator()
     .rotate([-c[0], 0])
     .center([0, c[1]])

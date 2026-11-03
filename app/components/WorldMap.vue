@@ -11,8 +11,10 @@ const props = withDefaults(
     color?: string
     scanKey?: number
     fallback?: { lat: number; lng: number } | null
+    /** 关闭悬停国名提示（定位题防剧透）；作答后可重新打开 */
+    noHover?: boolean
   }>(),
-  { color: '#1d4ed8', scanKey: 0, fallback: null },
+  { color: '#1d4ed8', scanKey: 0, fallback: null, noHover: false },
 )
 
 const emit = defineEmits<{ (e: 'pick', id: string): void }>()
@@ -33,12 +35,21 @@ function onLandClick(e: MouseEvent) {
     dragMoved = false
     return
   }
+  // 350ms 内第二次点击 = 双击：重置缩放，且不重复触发点选
+  const now = performance.now()
+  if (now - lastClickAt < 350) {
+    lastClickAt = 0
+    if (!panMode.value && zoomed.value) resetZoom()
+    return
+  }
+  lastClickAt = now
   const el = e.target as SVGElement | null
   const id = el?.getAttribute?.('data-id')
   if (id) emit('pick', id)
 }
 
 function onLandMove(e: MouseEvent) {
+  if (props.noHover) return
   if (dragging.value) {
     hover.value = null
     return
@@ -170,9 +181,12 @@ const vb = computed(() => `${view.value.x} ${view.value.y} ${view.value.w} ${vie
 
 const dragging = ref(false)
 let dragMoved = false
+let lastClickAt = 0
 let activePointer: number | null = null
 let startX = 0
+let startY = 0
 let startVx = 0
+let startVy = 0
 let lastX = 0
 let lastT = 0
 let velocity = 0
@@ -197,6 +211,44 @@ const currentCenterX = computed<number | null>(() => {
 
 function applyViewport(w: number, x: number) {
   view.value = { x: clamp(x, 0, W - w), y: 0, w, h: H }
+}
+
+/* ---------- 桌面端缩放：滚轮朝光标缩放、双轴拖拽、双击/按钮复位 ----------
+   同样只挪 viewBox，路径零重算；视窗保持 980:520 宽高比。 */
+
+/** 桌面端保持 980:520 宽高比的缩放视窗 */
+function applyZoomView(w: number, x: number, y: number) {
+  const h = (w * H) / W
+  view.value = { x: clamp(x, 0, W - w), y: clamp(y, 0, H - h), w, h }
+}
+
+const zoomed = computed(() => !panMode.value && view.value.w < W - 0.5)
+
+function resetZoom() {
+  cancelGlide()
+  view.value = { x: 0, y: 0, w: W, h: H }
+}
+
+/** 以视口中心为基准按倍率缩放（按钮触发） */
+function zoomBy(factor: number) {
+  const w = clamp(view.value.w * factor, MIN_VIEW_W, W)
+  const cx = view.value.x + view.value.w / 2
+  const cy = view.value.y + view.value.h / 2
+  applyZoomView(w, cx - w / 2, cy - (w * H) / W / 2)
+}
+
+function onWheel(e: WheelEvent) {
+  if (panMode.value || e.ctrlKey || e.altKey) return
+  e.preventDefault()
+  const box = host.value?.getBoundingClientRect()
+  if (!box || !box.width || !box.height) return
+  const px = clamp((e.clientX - box.left) / box.width, 0, 1)
+  const py = clamp((e.clientY - box.top) / box.height, 0, 1)
+  // 光标下的地理坐标在缩放前后保持不动
+  const gx = view.value.x + px * view.value.w
+  const gy = view.value.y + py * view.value.h
+  const w = clamp(view.value.w * Math.exp(e.deltaY * 0.0016), MIN_VIEW_W, W)
+  applyZoomView(w, gx - px * w, gy - py * ((w * H) / W))
 }
 
 /** 目标国居中时的视窗 x（没有目标则居中整个世界） */
@@ -235,24 +287,32 @@ function glide(v0: number) {
 }
 
 function onPointerDown(e: PointerEvent) {
-  if (!panMode.value) return
   cancelGlide()
   activePointer = e.pointerId
   dragMoved = false
   startX = lastX = e.clientX
+  startY = e.clientY
   startVx = view.value.x
+  startVy = view.value.y
   lastT = performance.now()
   velocity = 0
-  ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+  // 不在这里 setPointerCapture：捕获会把后续 click 重定向到 SVG 根元素，
+  // 桌面端点选国家会失效。等拖拽真正启动时再捕获（见 onPointerMovePan）。
 }
 
 function onPointerMovePan(e: PointerEvent) {
   if (activePointer !== e.pointerId) return
   const dx = e.clientX - startX
-  if (!dragMoved && Math.abs(dx) > 6) {
+  const dy = e.clientY - startY
+  if (!dragMoved && Math.hypot(dx, dy) > 6) {
     dragMoved = true
     dragging.value = true
     hover.value = null
+    try {
+      ;(e.currentTarget as Element).setPointerCapture(e.pointerId)
+    } catch {
+      /* 元素可能已卸载 */
+    }
   }
   if (!dragMoved) return
   const box = host.value!.getBoundingClientRect()
@@ -261,38 +321,82 @@ function onPointerMovePan(e: PointerEvent) {
   velocity = ((e.clientX - lastX) / Math.max(1, now - lastT)) * 1000 * scale
   lastX = e.clientX
   lastT = now
-  applyViewport(view.value.w, startVx - dx * scale)
+  if (panMode.value) {
+    // 窄屏滚动地球仪：只横向平移，纵向留给页面滚动
+    applyViewport(view.value.w, startVx - dx * scale)
+  } else {
+    applyZoomView(view.value.w, startVx - dx * scale, startVy - dy * scale)
+  }
 }
 
 function onPointerUpPan(e: PointerEvent) {
   if (activePointer !== e.pointerId) return
   activePointer = null
   dragging.value = false
-  if (dragMoved && Math.abs(velocity) > 120) glide(velocity)
+  // 真实按压几乎都带 1~10px 的微动：位移很小就归类为「点击」，
+  // 撤销 dragMoved（click 即将触发）并把视图弹回按下前，避免误吞点选
+  const dist = Math.hypot(e.clientX - startX, e.clientY - startY)
+  if (dragMoved && dist < 10) {
+    dragMoved = false
+    if (panMode.value) applyViewport(view.value.w, startVx)
+    else applyZoomView(view.value.w, startVx, startVy)
+    return
+  }
+  // 惯性滑动只在窄屏横向模式有意义
+  if (dragMoved && panMode.value && Math.abs(velocity) > 120) glide(velocity)
 }
 
-/** 目标国变化时，地球仪平滑滚到它居中（拖拽中不打扰） */
+/** 目标国的投影质心（x/y），用于缩放态下的自动居中 */
+const currentCenterXY = computed<{ x: number; y: number } | null>(() => {
+  const f = targetFeature.value
+  if (f) {
+    const c = path.centroid(f)
+    if (Number.isFinite(c[0]) && Number.isFinite(c[1])) return { x: c[0], y: c[1] }
+  }
+  if (props.fallback) {
+    const xy = projection([props.fallback.lng, props.fallback.lat])
+    if (xy) return { x: xy[0], y: xy[1] }
+  }
+  return null
+})
+
+/** 视窗平滑动画（窄屏只动 x，桌面 x/y 都动） */
+function animateView(toX: number, toY: number, w: number) {
+  if (reducedMotion()) {
+    if (panMode.value) applyViewport(w, toX)
+    else applyZoomView(w, toX, toY)
+    return
+  }
+  cancelGlide()
+  const fromX = view.value.x
+  const fromY = view.value.y
+  const t0 = performance.now()
+  const D = 450
+  const step = (t: number) => {
+    const p = Math.min(1, (t - t0) / D)
+    const ease = 1 - Math.pow(1 - p, 3)
+    if (panMode.value) applyViewport(w, fromX + (toX - fromX) * ease)
+    else applyZoomView(w, fromX + (toX - fromX) * ease, fromY + (toY - fromY) * ease)
+    if (p < 1) raf = requestAnimationFrame(step)
+  }
+  raf = requestAnimationFrame(step)
+}
+
+/** 目标国变化时平滑居中：窄屏滚动地球仪 / 桌面缩放态都生效（拖拽中不打扰） */
 watch(
   () => props.countryId,
   () => {
-    if (!panMode.value || activePointer !== null) return
-    const to = centerBias(view.value.w)
-    if (to === view.value.x) return
-    if (reducedMotion()) {
-      applyViewport(view.value.w, to)
+    if (activePointer !== null) return
+    if (panMode.value) {
+      const to = centerBias(view.value.w)
+      if (to !== view.value.x) animateView(to, 0, view.value.w)
       return
     }
-    cancelGlide()
-    const from = view.value.x
-    const t0 = performance.now()
-    const D = 450
-    const step = (t: number) => {
-      const p = Math.min(1, (t - t0) / D)
-      const ease = 1 - Math.pow(1 - p, 3)
-      applyViewport(view.value.w, from + (to - from) * ease)
-      if (p < 1) raf = requestAnimationFrame(step)
-    }
-    raf = requestAnimationFrame(step)
+    if (!zoomed.value) return
+    const c = currentCenterXY.value
+    if (!c) return
+    const w = view.value.w
+    animateView(c.x - w / 2, c.y - (w * H) / W / 2, w)
   },
 )
 
@@ -329,6 +433,7 @@ onBeforeUnmount(() => {
       @pointermove="onPointerMovePan"
       @pointerup="onPointerUpPan"
       @pointercancel="onPointerUpPan"
+      @wheel="onWheel"
     >
       <defs>
         <radialGradient id="ocean" cx="50%" cy="42%" r="72%">
@@ -388,6 +493,12 @@ onBeforeUnmount(() => {
 
     <div v-if="!ready" class="overlay">地图数据装载中…</div>
     <div v-else-if="error" class="overlay err">{{ error }}</div>
+
+    <div v-if="!panMode && ready && !error" class="zoom-ctl">
+      <button type="button" aria-label="放大地图" @click="zoomBy(1 / 1.5)">＋</button>
+      <button type="button" aria-label="缩小地图" @click="zoomBy(1.5)">－</button>
+      <button v-if="zoomed" type="button" class="reset" aria-label="重置视图" @click="resetZoom">复位</button>
+    </div>
 
     <div
       v-if="hover"
@@ -474,6 +585,52 @@ onBeforeUnmount(() => {
 
 .overlay.err {
   color: #b45309;
+}
+
+/* 桌面端缩放控制按钮 */
+.zoom-ctl {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  gap: 6px;
+  z-index: 5;
+}
+
+.zoom-ctl button {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #c3d5db;
+  border-radius: 6px;
+  background: rgba(253, 249, 238, 0.94);
+  color: #191712;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 4px 12px -6px rgba(0, 0, 0, 0.45);
+}
+
+.zoom-ctl button:hover {
+  background: #fffdf7;
+}
+
+.zoom-ctl button.reset {
+  width: auto;
+  padding: 0 9px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+
+/* 桌面端拖拽时的抓取光标（陆地点选光标优先级更高，仅空白海面/整体表现为 grab） */
+.world-svg:not([data-pan='true']) {
+  cursor: grab;
+}
+
+.world-svg:not([data-pan='true']):active {
+  cursor: grabbing;
 }
 
 .tip {
