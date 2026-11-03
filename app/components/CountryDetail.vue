@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import type { Country } from '~/data/types'
 import { CONTINENT_META, byContinent } from '~/data'
+import { speechAvailable, speak } from '~/lib/speech'
 
 const props = defineProps<{ country: Country | null; highlightCity?: string }>()
 const emit = defineEmits<{
@@ -57,6 +58,12 @@ const nearby = computed(() => {
   return byContinent[c.continent].filter((x) => x.id !== c.id).slice(0, 7)
 })
 
+const canSpeak = speechAvailable()
+
+function onSpeak() {
+  if (props.country) speak(props.country.nameEn, 'en-US')
+}
+
 /** tablist 方向键导航：←/→ 移动并激活，Home/End 跳两端 */
 function onTabKeydown(e: KeyboardEvent) {
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return
@@ -87,7 +94,12 @@ function onTabKeydown(e: KeyboardEvent) {
             <div class="kicker">
               {{ country.continent }} · {{ country.subregion }} · {{ country.nameEn }}
             </div>
-            <h2 class="display">{{ country.name }}</h2>
+            <h2 class="display speak-row">
+              {{ country.name }}
+              <button v-if="canSpeak" class="speak-btn" title="朗读英文名" aria-label="朗读英文国名" @click="onSpeak">
+                <UiIcon name="sound" class="spk-ico" />
+              </button>
+            </h2>
             <p class="tagline">{{ country.tagline }}</p>
           </div>
           <div class="flag-box">
@@ -346,6 +358,41 @@ function onTabKeydown(e: KeyboardEvent) {
   min-width: 0;
 }
 
+.speak-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.speak-btn {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fffdf8;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.speak-btn:hover {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: #fdf9ee;
+}
+
+.speak-btn:active {
+  transform: scale(0.92);
+}
+
+.spk-ico {
+  width: 13px;
+  height: 13px;
+}
+
 .flag-box {
   flex: none;
   padding: 4px;
@@ -355,6 +402,7 @@ function onTabKeydown(e: KeyboardEvent) {
   box-shadow: var(--shadow-sm);
   transform: rotate(-2deg);
 }
+
 
 .flag {
   width: 84px;
