@@ -12,10 +12,15 @@
     "data:sync": "node scripts/sync-map-data.mjs",
     "data:validate": "node --experimental-strip-types --no-warnings scripts/validate-data.mjs",
     "data:shapes": "node scripts/build-detail-shapes.mjs",
+    "data:terrain": "node scripts/build-terrain.mjs",
     "audit": "node scripts/audit.mjs",
     "check": "pnpm data:sync && pnpm data:shapes && pnpm data:validate && pnpm typecheck && pnpm build"
   },
   "dependencies": {
+    "@deck.gl/core": "^9.4.1",
+    "@deck.gl/geo-layers": "^9.4.1",
+    "@deck.gl/layers": "^9.4.1",
+    "@deck.gl/mesh-layers": "^9.4.1",
     "@fontsource/noto-serif-sc": "^5.3.1",
     "d3-geo": "^3.1.1",
     "motion-v": "^1.7.4",
@@ -29,7 +34,10 @@
     "@types/geojson": "^7946.0.16",
     "@types/topojson-client": "^3.1.4",
     "@types/topojson-specification": "^1.0.5",
+    "geotiff": "^3.0.5",
+    "jpeg-js": "^0.4.4",
     "playwright-core": "^1.64.1",
+    "pngjs": "^7.0.0",
     "typescript": "^5.9.3",
     "vue-tsc": "^3.3.14"
   }
