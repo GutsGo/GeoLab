@@ -6,6 +6,10 @@ import type { Filter } from '~/composables/useDeck'
 import { useAchievements } from '~/composables/useAchievements'
 
 type View = 'draw' | 'globe' | 'game'
+/** 全球视图的地图风格：平面（默认）/ 微3D 地形 */
+type MapStyle = 'flat' | 'terrain'
+
+const TerrainMap = defineAsyncComponent(() => import('~/components/TerrainMap.vue'))
 
 const deck = useDeck()
 const achv = useAchievements()
@@ -26,6 +30,29 @@ const {
 } = deck
 
 const view = ref<View>('draw')
+
+/* ---------- 视图常驻：首次访问才挂载，之后只切可见性不销毁 ----------
+ * 全球视图里的地图组件（deck.gl 实例、canvas、WebGL 上下文）销毁重建会
+ * 闪一下并跳视角，所以 globe/game 一旦去过就保持挂载，用 v-show 隐藏 */
+const globeVisited = ref(false)
+const gameVisited = ref(false)
+watch(view, (v) => {
+  if (v === 'globe') globeVisited.value = true
+  else if (v === 'game') gameVisited.value = true
+})
+
+/* ---------- 地图风格切换：平面为默认，选择跟随 useState 持久化到 localStorage ---------- */
+const MAP_STYLE_KEY = 'geolab.mapview.v1'
+const mapStyle = useState<MapStyle>('geo-map-style', () => 'flat')
+
+watch(mapStyle, (v) => {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(MAP_STYLE_KEY, v)
+  } catch {
+    /* quota 或隐私模式，放弃持久化 */
+  }
+})
 const indexOpen = ref(false)
 const achvOpen = ref(false)
 const compareOpen = ref(false)
@@ -252,6 +279,12 @@ onMounted(() => {
   deck.hydrate()
   achv.hydrate()
   cn.hydrate()
+  try {
+    const saved = localStorage.getItem(MAP_STYLE_KEY)
+    if (saved === 'flat' || saved === 'terrain') mapStyle.value = saved
+  } catch {
+    /* 忽略损坏的本地存储 */
+  }
   if (!current.value) draw()
   window.addEventListener('keydown', onKey)
 })
@@ -309,8 +342,8 @@ onBeforeUnmount(() => {
 
     <!-- ============ 主内容区：三个视图共用一个 main，flex:1 把 footer 顶到视口底 ============ -->
     <main class="views">
-      <!-- ============ 抽卡视图 ============ -->
-      <template v-if="view === 'draw'">
+      <!-- ============ 抽卡视图（默认，始终挂载） ============ -->
+      <div v-show="view === 'draw'">
       <div class="filter-row">
         <div class="chips">
           <button v-for="f in ['全部', ...deck.CONTINENTS]" :key="f" class="chip" :data-active="!drawCn && filter === f"
@@ -440,23 +473,37 @@ onBeforeUnmount(() => {
           </AnimatePresence>
         </aside>
       </div>
-    </template>
+    </div>
 
-    <!-- ============ 全球视图 ============ -->
-    <template v-else-if="view === 'globe'">
+    <!-- ============ 全球视图：首次访问后常驻，地图实例不销毁 ============ -->
+    <div v-if="globeVisited" v-show="view === 'globe'">
       <div class="globe-view">
         <section class="map-stage">
           <ClientOnly>
-            <WorldMap :country-id="currentId" :color="accent"
-              :fallback="current?.cities[0] ? { lat: current.cities[0].lat, lng: current.cities[0].lng } : null"
-              @pick="onMapPick" />
+            <!-- KeepAlive：平面/微3D 互切不销毁重建，deck 实例与视角原样保留 -->
+            <KeepAlive>
+              <WorldMap v-if="mapStyle === 'flat'" :country-id="currentId" :color="accent"
+                :fallback="current?.cities[0] ? { lat: current.cities[0].lat, lng: current.cities[0].lng } : null"
+                @pick="onMapPick" />
+              <TerrainMap v-else :country-id="currentId" :color="accent" @pick="onMapPick" />
+            </KeepAlive>
             <template #fallback>
               <div class="map-skeleton">地图装载中…</div>
             </template>
           </ClientOnly>
           <div class="hud hud-top">
             <span class="hud-chip">全球视图</span>
-            <span class="hud-chip soft">点击任意国家进入抽卡视图</span>
+            <div class="style-switch" role="tablist" aria-label="地图风格">
+              <button class="ss-btn" role="tab" :aria-selected="mapStyle === 'flat'"
+                :data-active="mapStyle === 'flat'" title="暖纸平面地图" @click="mapStyle = 'flat'">
+                平面
+              </button>
+              <button class="ss-btn" role="tab" :aria-selected="mapStyle === 'terrain'"
+                :data-active="mapStyle === 'terrain'" title="微3D 地形视图（可拖拽旋转）" @click="mapStyle = 'terrain'">
+                微3D
+              </button>
+            </div>
+            <span class="hud-chip soft">{{ mapStyle === 'terrain' ? '拖拽平移 · 滚轮缩放 · 双击复位 · 点击国家' : '点击任意国家进入抽卡视图' }}</span>
           </div>
           <div class="hud hud-bottom">
             <div class="legend">
@@ -499,10 +546,10 @@ onBeforeUnmount(() => {
           </div>
         </div>
       </div>
-    </template>
+    </div>
 
-    <!-- ============ 挑战视图：范围切换 + 对局 ============ -->
-    <template v-else>
+    <!-- ============ 挑战视图：首次访问后常驻 ============ -->
+    <div v-if="gameVisited" v-show="view === 'game'">
       <div class="filter-row">
         <div class="chips">
           <button class="chip" :data-active="gameScope === 'world'" @click="gameScope = 'world'">世界国家</button>
@@ -529,7 +576,7 @@ onBeforeUnmount(() => {
         <GamePanel @open="onGameOpen" />
       </template>
       <ChinaQuiz v-else ref="cnQuizRef" />
-    </template>
+    </div>
     </main>
 
     <footer class="foot-note">
@@ -823,6 +870,38 @@ kbd {
   text-transform: none;
   font-size: 10px;
   color: var(--muted);
+}
+
+/* 平面 / 微3D 风格切换：与 hud-chip 同一悬浮语言 */
+.style-switch {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  background: rgba(255, 253, 247, 0.72);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 12px -8px rgba(25, 23, 18, 0.45);
+}
+
+.ss-btn {
+  padding: 5px 13px;
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--ink-2);
+  transition:
+    background 0.18s ease,
+    color 0.18s ease;
+}
+
+.ss-btn:hover {
+  background: rgba(25, 23, 18, 0.08);
+}
+
+.ss-btn[data-active='true'] {
+  background: var(--ink);
+  color: #fdf9ee;
 }
 
 .map-skeleton {
