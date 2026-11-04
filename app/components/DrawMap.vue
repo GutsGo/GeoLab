@@ -47,6 +47,16 @@ const hatchId = `dm-hatch-${uid}`
 const stroke = computed(() => (props.tone === 'ink' ? '#38311f' : props.color))
 const fillTop = computed(() => (props.tone === 'ink' ? '#6a6250' : props.color))
 
+/**
+ * 反投影返回的是 [-180, 180] 的原始经度。跨反子午线的取景（基里巴斯
+ * 165°E→224°E、斐济、新西兰）四角反投影会得到 165 和 -136 这样的混合值，
+ * 直接 min/max 会撕出横跨 300° 的假视口。折算到投影的旋转坐标系——
+ * 那里画面中心恒为 0、永不跨 ±180——min/max 才是真实范围。
+ */
+function toRotatedLng(lng: number, rotLng: number): number {
+  return ((((lng + rotLng) % 360) + 540) % 360) - 180
+}
+
 const all = ref<WorldFeature[] | null>(null)
 /** 小国的精细轮廓补丁 + 配套的邻国陆块（与轮廓同一套弧段简化，边界贴合） */
 const detail = ref<DetailPatch | null>(null)
@@ -249,7 +259,8 @@ const graticule = computed(() => {
   const steps = [30, 20, 10, 5, 2, 1, 0.5, 0.25, 0.1]
   const step = steps.find((s) => s <= 84 / pxPerDeg) ?? 0.1
 
-  // 画布四角反投影回经纬度，得到整幅可视区的经纬范围
+  // 画布四角反投影回经纬度，得到整幅可视区的经纬范围；
+  // 经度先折算到旋转坐标系再取界（见 toRotatedLng 的注释）
   const corners = [
     p.invert?.([0, 0]),
     p.invert?.([W, 0]),
@@ -257,13 +268,14 @@ const graticule = computed(() => {
     p.invert?.([W, H]),
   ] as ([number, number] | undefined)[]
   if (corners.some((c) => !c || !Number.isFinite(c[0]) || !Number.isFinite(c[1]))) return []
-  const lngs = corners.map((c) => c![0])
+  const rotLng = p.rotate()[0]
+  const lngs = corners.map((c) => toRotatedLng(c![0], rotLng))
   const lats = corners.map((c) => c![1])
   const w = Math.min(...lngs)
   const e = Math.max(...lngs)
   const s = Math.min(...lats)
   const n = Math.max(...lats)
-  // 反投影跨了反子午线（正常取景不会发生），保守放弃
+  // 世界级全景（视口横跨 180° 以上）网格线没有意义，保守放弃
   if (e - w > 180) return []
 
   const lines: { d: string; major: boolean }[] = []
@@ -281,7 +293,8 @@ const graticule = computed(() => {
   for (let lng = lngFrom; lng <= e && lines.length < 34; lng += step) {
     const pts: [number, number][] = []
     for (let lat = latFrom; lat <= latTo; lat += sampleLat) {
-      const xy = p([lng, lat])
+      // w/e 是旋转坐标系里的经度，投影入口要换回原始经度
+      const xy = p([lng - rotLng, lat])
       if (xy && Number.isFinite(xy[0])) pts.push(xy as [number, number])
     }
     const d = build(pts)
@@ -290,7 +303,7 @@ const graticule = computed(() => {
   for (let lat = latFrom; lat <= latTo && lines.length < 34; lat += step) {
     const pts: [number, number][] = []
     for (let lng = w; lng <= e; lng += sampleLng) {
-      const xy = p([lng, lat])
+      const xy = p([lng - rotLng, lat])
       if (xy && Number.isFinite(xy[0])) pts.push(xy as [number, number])
     }
     const d = build(pts)
@@ -382,7 +395,12 @@ function buildContextShapes() {
     })
     .filter((v): v is [number, number] => !!v && Number.isFinite(v[0]) && Number.isFinite(v[1]))
   if (!corners.length) return []
-  const lngs = corners.map((c) => c[0])
+  // 经度折算到旋转坐标系再取界：反投影给的是 [-180,180] 的原始经度，
+  // 跨反子午线的取景（基里巴斯 165°E→224°E）直接 min/max 会得到
+  // 「-136→165」这种横跨 300° 的假范围，reachLng 随之膨胀到 600+，
+  // 粗筛形同虚设，全世界的国家都涌进可见性判定。
+  const rotLng = proj.rotate()[0]
+  const lngs = corners.map((c) => toRotatedLng(c[0], rotLng))
   const lats = corners.map((c) => c[1])
   const box = {
     w: Math.min(...lngs),
@@ -407,7 +425,8 @@ function buildContextShapes() {
       return false
     }
     if (!Number.isFinite(c[0]) || !Number.isFinite(c[1])) return false
-    const dLng = Math.abs(((((c[0] - midLng) % 360) + 540) % 360) - 180)
+    const rc = toRotatedLng(c[0], rotLng)
+    const dLng = Math.abs(((((rc - midLng) % 360) + 540) % 360) - 180)
     return dLng < reachLng && Math.abs(c[1] - midLat) < reachLat
   }
 
@@ -506,6 +525,10 @@ function buildContextShapes() {
     }
     const [[x0, y0], [x1, y1]] = bb
     if (!Number.isFinite(x0) || !Number.isFinite(x1)) continue
+    // 旋转系里跨 ±180° 的国家（如本例中的非洲国家）会被反子午线裁剪成
+    // 两块碎片，bounds 横贯整个投影平面（宽 ≈ 2π·scale），visible 必然
+    // 假性命中整个画布——这类碎片在画外，直接跳过
+    if (x1 - x0 > Math.PI * proj.scale()) continue
     const visible = {
       x0: Math.max(x0, view.x0),
       y0: Math.max(y0, view.y0),
