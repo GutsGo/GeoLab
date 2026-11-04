@@ -2,7 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { geoNaturalEarth1, geoPath, geoGraticule10 } from 'd3-geo'
 import type { GeoSphere } from 'd3-geo'
-import { loadWorld, isSyntheticId, type WorldFeature } from '~/lib/world'
+import { loadWorld, loadDetailShapes, isSyntheticId, type WorldFeature } from '~/lib/world'
 import { countryById } from '~/data'
 
 const props = withDefaults(
@@ -80,6 +80,8 @@ const H = 520
 const SPHERE: GeoSphere = { type: 'Sphere' }
 
 const features = ref<WorldFeature[]>([])
+/** 110m 缺轮廓的小国的精细补丁（与抽卡视图同一份缓存） */
+const detailSelf = ref<Map<string, WorldFeature> | null>(null)
 const error = ref('')
 const ready = ref(false)
 
@@ -100,6 +102,13 @@ onMounted(async () => {
   } finally {
     ready.value = true
   }
+  // 110m 里没有轮廓的小国（新加坡、圣马力诺…）用精细补丁补齐高亮。
+  // 异步补位不阻塞首帧；补丁与抽卡视图共享同一份全局缓存。
+  loadDetailShapes()
+    .then((m) => {
+      detailSelf.value = m.self
+    })
+    .catch(() => {})
 })
 
 const spherePath = path(SPHERE) ?? ''
@@ -129,13 +138,24 @@ const others = computed(() => baseShapes.value.filter((s) => s.id !== props.coun
 const targetFeature = computed(() => features.value.find((f) => f.id === props.countryId) ?? null)
 
 /**
+ * 110m 没有轮廓的小国（定位题亮答案时最明显）改用 10m 精细补丁高亮。
+ * 补丁与本国抽卡轮廓同源，投影到全球视图只是换个尺度描绘。
+ */
+const patchFeature = computed(() =>
+  props.countryId && !targetFeature.value ? detailSelf.value?.get(props.countryId) ?? null : null,
+)
+
+/** 高亮/光晕/取景共用的目标几何：110m 优先，缺了用补丁 */
+const targetGeom = computed(() => targetFeature.value ?? patchFeature.value)
+
+/**
  * 光晕滤波区域（userSpaceOnUse）：按目标国 bbox 外扩固定的模糊半径。
  * 默认的 objectBoundingBox 百分比区域跟着 bbox 缩放，小国的边距在
  * 绝对尺寸上会小于模糊半径（3σ ≈ 21 单位），光晕被裁成一圈矩形硬边。
  */
 const GLOW_PAD = 26
 const glowRegion = computed(() => {
-  const f = targetFeature.value
+  const f = targetGeom.value
   if (!f) return null
   let b: [[number, number], [number, number]]
   try {
@@ -152,20 +172,12 @@ const glowRegion = computed(() => {
   }
 })
 
-/** 目标国在屏幕上太小（或数据里干脆没有），补一个醒目的圆点标记 */
-const microPoint = computed(() => {
-  const f = targetFeature.value
-  if (f) {
-    const b = path.bounds(f)
-    const w = b[1][0] - b[0][0]
-    const h = b[1][1] - b[0][1]
-    if (Math.max(w, h) >= 11) return null
-    const c = path.centroid(f)
-    return Number.isFinite(c[0]) ? { x: c[0], y: c[1] } : null
-  }
-  if (!props.fallback) return null
-  const xy = projection([props.fallback.lng, props.fallback.lat])
-  return xy ? { x: xy[0], y: xy[1] } : null
+/** 补丁高亮 shape：110m 的 target 缺席时才登场 */
+const patchShape = computed(() => {
+  const f = patchFeature.value
+  if (!f) return null
+  const d = path(f)
+  return d ? { id: f.id, name: f.name, d, clickable: false } : null
 })
 
 /* ---------- 窄屏「滚动地球仪」：动态 viewBox 局部视窗 ----------
@@ -195,9 +207,9 @@ let raf = 0
 const reducedMotion = () =>
   typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
-/** 当前目标国的投影质心 x（没有则用 fallback 坐标），用于居中 */
+/** 当前目标国的投影质心 x（110m 缺轮廓用补丁，再退 fallback），用于居中 */
 const currentCenterX = computed<number | null>(() => {
-  const f = targetFeature.value
+  const f = targetGeom.value
   if (f) {
     const c = path.centroid(f)
     if (Number.isFinite(c[0])) return c[0]
@@ -348,7 +360,7 @@ function onPointerUpPan(e: PointerEvent) {
 
 /** 目标国的投影质心（x/y），用于缩放态下的自动居中 */
 const currentCenterXY = computed<{ x: number; y: number } | null>(() => {
-  const f = targetFeature.value
+  const f = targetGeom.value
   if (f) {
     const c = path.centroid(f)
     if (Number.isFinite(c[0]) && Number.isFinite(c[1])) return { x: c[0], y: c[1] }
@@ -477,13 +489,26 @@ onBeforeUnmount(() => {
         />
       </g>
 
-      <g v-if="target" class="target-layer">
-        <path :d="target.d" fill="url(#hit)" :stroke="color" stroke-width="1.2" filter="url(#softGlow)" class="target" />
-      </g>
-
-      <g v-if="microPoint" class="micro">
-        <circle :cx="microPoint.x" :cy="microPoint.y" r="14" :fill="color" fill-opacity="0.16" />
-        <circle :cx="microPoint.x" :cy="microPoint.y" r="5.5" :fill="color" stroke="#fffdf7" stroke-width="1.4" />
+      <g v-if="target || patchShape" class="target-layer">
+        <path
+          v-if="target"
+          :d="target.d"
+          fill="url(#hit)"
+          :stroke="color"
+          stroke-width="1.2"
+          filter="url(#softGlow)"
+          class="target"
+        />
+        <!-- 110m 缺轮廓的小国：用 10m 补丁高亮，不再画圆点 -->
+        <path
+          v-if="patchShape"
+          :d="patchShape.d"
+          fill="url(#hit)"
+          :stroke="color"
+          stroke-width="1.2"
+          filter="url(#softGlow)"
+          class="target"
+        />
       </g>
 
       <g :key="scanKey" class="scan">
