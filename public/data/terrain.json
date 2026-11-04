@@ -1,0 +1,22 @@
+{
+  "size": 2048,
+  "textureSize": 4096,
+  "bounds": [
+    -180,
+    -85.0511287798066,
+    180,
+    85.0511287798066
+  ],
+  "exaggeration": 60,
+  "decode": {
+    "rScaler": 256,
+    "gScaler": 1,
+    "bScaler": 0.00390625,
+    "offset": -32768
+  },
+  "sources": {
+    "elevation": "AWS Open Data Terrain Tiles (terrarium), 聚合自 SRTM/ETOPO/GEBCO 等，公有领域",
+    "texture": "Natural Earth I with Shaded Relief & Water, 1:50m, 公有领域 (naciscdn.org)"
+  },
+  "generatedAt": "2026-11-04T06:33:53.234Z"
+}
